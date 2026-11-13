@@ -18,6 +18,7 @@ import snakey_content as _content
 import snakey_drawing as _drawing
 import snakey_game as _game
 import snakey_menu as _menu
+import snakey_minigames as _minigames
 import snakey_minis as _minis
 import snakey_save as _save
 import snakey_settings as _settings
@@ -26,7 +27,7 @@ import snakey_utils as _utils
 import snakey_widgets as _widgets
 
 for _m in (_content, _save, _utils, _drawing, _assets, _widgets, _shop,
-           _settings, _minis, _achievements, _menu, _game):
+           _settings, _minigames, _minis, _achievements, _menu, _game):
     globals().update({n: v for n, v in vars(_m).items()
                       if not n.startswith("_")})
 
