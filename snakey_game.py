@@ -14,6 +14,7 @@ from snakey_content import (
     BORDER,
     CELL,
     COLS,
+    DIFF_SLIDER,
     DIFFICULTIES,
     DIM,
     FOOD_BY_ID,
@@ -24,6 +25,7 @@ from snakey_content import (
     LOCKED_BG,
     MG2_SPOTS,
     MG3_ZONE_R,
+    MG_DIFF_ORDER,
     MINIGAMES,
     PANEL,
     RED,
@@ -43,9 +45,10 @@ from snakey_utils import (
     round_rect,
     seg_color,
 )
+from snakey_minigames import MinigameMixin
 from snakey_widgets import Screen
 
-class GameScreen(Screen):
+class GameScreen(MinigameMixin, Screen):
     def __init__(self, master, app):
         super().__init__(master, app)
         head = tk.Frame(self, bg=BG)
@@ -65,9 +68,13 @@ class GameScreen(Screen):
                                 highlightbackground=BORDER)
         self.canvas.pack(padx=12, pady=4)
 
+        self.slider = tk.Canvas(self, width=COLS * CELL, height=86, bg=BG,
+                                highlightthickness=0)
+        self.slider.pack()
+
         tk.Label(self, text="Стрелки / WASD — движение    P — пауза    R — заново"
-                 "    C — воскреситься    Esc — меню",
-                 bg=BG, fg=DIM, font=(app.font_ui, 9)).pack(pady=(2, 10))
+                 "    C — воскреситься    B — стройка    Esc — меню",
+                 bg=BG, fg=DIM, font=(app.font_ui, 9)).pack(pady=(2, 8))
 
         self.job = None
         self.game_over = True
@@ -78,6 +85,16 @@ class GameScreen(Screen):
         self._fx_active = 0
         self.mg = None
         self.mg_diff = "normal"
+        self.diff_key = "normal"
+        self._dir_queue = []
+        self._mgsnake_items = []
+        self._mgsnake_active = 0
+        self._tunnel_items = []
+        self._dark_items = []
+        self._food_born = {}
+        self.mg8_build = False
+        self.mg8_walls = set()
+        self._mg8_wall_dirty = True
         self.cfg = DIFFICULTIES["normal"]
         self.theme = THEMES[0]
         self.revive_used = False
@@ -130,6 +147,8 @@ class GameScreen(Screen):
             cfg = DIFFICULTIES.get(self.app.save.get("speed"), DIFFICULTIES["normal"])
             if cfg["level"] > level:
                 cfg = DIFFICULTIES["normal"]
+            self.diff_key = next((k for k, v in DIFFICULTIES.items()
+                                  if v is cfg), "normal")
             self.diff_var.set(f"Ур. {level} · {cfg['label']}"
                               + (f" · {cfg['note']}" if cfg["note"] else ""))
         else:
@@ -144,6 +163,7 @@ class GameScreen(Screen):
                 diff_key = "normal"
                 dcfg = mg["diffs"]["normal"]
             self.mg_diff = diff_key
+            self.diff_key = diff_key
             cfg = dict(dcfg)
             cfg["label"] = mg["label"]
             self.diff_var.set(f"{mg['icon']} {mg['label']} · "
@@ -152,10 +172,11 @@ class GameScreen(Screen):
         self.app.next_diff = None
         self.cfg = cfg
         self.theme = self._theme()
+        deadly = not cfg["wrap"] and self.mg != "mg3"
         self.canvas.config(bg=self.theme["grad"][0] if self.theme.get("grad")
                            else self.theme["grid_a"],
-                           highlightbackground="#ff5c5c" if not cfg["wrap"]
-                           and self.mg != "mg3" else self.theme["border"])
+                           highlightbackground=DIFF_SLIDER[self.diff_key][0]
+                           if deadly else self.theme["border"])
         self.revive_used = False
         self.eaten_count = 0
         self.delivered = 0
@@ -164,6 +185,9 @@ class GameScreen(Screen):
         self.target_color = None
         self.base_hue = 0.0
         self.fruit_colors = {}
+        self._dir_queue = []
+        self._food_born = {}
+        self.mg8_build = False
         t = cfg.get("time", 0)
         self.time_left = float(t) if isinstance(t, (int, float)) else 0.0
         self._time_shown = -1
@@ -198,6 +222,8 @@ class GameScreen(Screen):
             self._spawn_mg3_apple()
             self._spawn_mg3_apple()
             self._spawn_mg3_apple()
+        elif self.mg is not None:
+            self._mg_setup()
         else:
             self._spawn_food("apple")
             if random.random() < 0.8:
@@ -273,6 +299,7 @@ class GameScreen(Screen):
         pos = random.choice(free)
         base = FOOD_BY_ID[kind]["size"] if kind in FOOD_BY_ID else 0.9
         self.foods.append((kind, pos, base + random.uniform(-0.12, 0.12)))
+        self._food_born[pos] = self.tick_count
         self._foods_dirty = True
         return pos
 
@@ -290,7 +317,9 @@ class GameScreen(Screen):
         free = [(r, c) for r in range(ROWS // 2) for c in range(COLS)
                 if (r, c) not in occupied]
         if free:
-            self.foods.append(("apple", random.choice(free), 1.0))
+            pos = random.choice(free)
+            self.foods.append(("apple", pos, 1.0))
+            self._food_born[pos] = self.tick_count
             self._foods_dirty = True
 
     def _mg2_spawn_base(self):
@@ -383,9 +412,15 @@ class GameScreen(Screen):
         }
         if key in moves:
             dr, dc = moves[key]
-            cur_dr, cur_dc = self.direction
-            if (dr, dc) != (-cur_dr, -cur_dc):
-                self.next_direction = (dr, dc)
+            if self.mg == "mg6" and dc != 0:
+                return
+            if self.mg == "mg8" and self.mg8_build:
+                self._mg8_place(dr, dc)
+                return
+            self._queue_dir(dr, dc)
+        elif key == "b" and self.mg == "mg8" and not self.game_over:
+            self.mg8_build = not self.mg8_build
+            self._draw()
         elif key == "p":
             self.paused = not self.paused
             if self.paused:
@@ -393,6 +428,16 @@ class GameScreen(Screen):
             else:
                 self._schedule()
             self._draw()
+
+    def _queue_dir(self, dr, dc):
+        last = self._dir_queue[-1] if self._dir_queue else self.direction
+        if (dr, dc) == last:
+            return
+        if ((dr, dc) == (-last[0], -last[1])
+                and self.mg != "mg6" and last != (0, 0)):
+            return
+        if len(self._dir_queue) < 2:
+            self._dir_queue.append((dr, dc))
 
     def _tick(self):
         if self.paused or self.game_over:
@@ -405,7 +450,8 @@ class GameScreen(Screen):
                 self._time_shown = shown
                 self.diff_var.set(f"⏱ {shown} сек")
             if self.time_left <= 0:
-                self._end_game("ВРЕМЯ ВЫШЛО!")
+                self._end_game("ВРЕМЯ ВЫШЛО!" if self.mg != "mg9"
+                               else "90 СЕКУНД!", ok=self.mg == "mg9")
                 return
 
         for p in self.particles:
@@ -420,6 +466,15 @@ class GameScreen(Screen):
             p[3] -= 1
         self.popups = [p for p in self.popups if p[3] > 0]
 
+        if self._dir_queue:
+            nd = self._dir_queue.pop(0)
+            if (self.mg == "mg6"
+                    or nd != (-self.direction[0], -self.direction[1])):
+                self.next_direction = nd
+        if self.mg == "mg6":
+            self.direction = self.next_direction
+            self._mg6_tick()
+            return
         self.direction = self.next_direction
         dr, dc = self.direction
         head_r, head_c = self.snake[0]
@@ -436,7 +491,8 @@ class GameScreen(Screen):
             return
         new_head = (new_r, new_c)
 
-        if new_head in self.snake or new_head in self.obstacles:
+        if new_head in self.snake or new_head in self.obstacles \
+                or (self.mg == "mg8" and new_head in self.mg8_walls):
             self._end_game()
             return
 
@@ -465,6 +521,15 @@ class GameScreen(Screen):
                 self.carrying = True
                 sfx("eat")
                 self._spawn_mg3_apple()
+            elif self.mg == "mg5" and eaten[0] == "golden":
+                self.score += 5
+                self.speed = self.cfg["speed"]
+                sfx("coin")
+                self.score_var.set(f"Счёт: {self.score}")
+                px = eaten[1][1] * CELL + CELL / 2
+                py = eaten[1][0] * CELL + CELL / 2
+                self.popups.append([px, py - 10, "+5 ⚡", 10, GOLD])
+                self._spawn_food("golden")
             else:
                 info = FOOD_BY_ID[eaten[0]]
                 self.eaten_count += 1
@@ -499,7 +564,11 @@ class GameScreen(Screen):
                         and sum(1 for k, *_ in self.foods if k == "poison") < 2
                         and random.random() < 0.3):
                     self._spawn_food("poison")
-        if self.mg == "mg3" or eaten is None:
+                self._mg_eat_hook(eaten, info)
+                if self.game_over:
+                    return
+        if eaten is None or self.mg in ("mg3", "mg8") \
+                or (self.mg == "mg5" and eaten[0] == "golden"):
             self.snake.pop()
 
         if self.mg == "mg3" and self.carrying:
@@ -521,6 +590,10 @@ class GameScreen(Screen):
                         self.particles.append([hx, hy, math.cos(ang) * spd,
                                                math.sin(ang) * spd,
                                                random.randint(5, 9), GOLD])
+
+        if self.mg not in (None, "mg1", "mg2", "mg3") \
+                and not self._mg_after_tick():
+            return
 
         self._draw()
         self._schedule()
@@ -568,6 +641,39 @@ class GameScreen(Screen):
         elif mode == "mg3":
             earned = round(self.delivered * 12 * reward)
             exp_gain = round(self.delivered * 6 * exp_mult)
+        elif mode == "mg4":
+            if ok:
+                earned = round(self.cfg["target"] * 5 * reward)
+                exp_gain = round(self.cfg["target"] * 3 * exp_mult)
+            else:
+                earned = round(self.eaten_count * 1.5 * reward)
+                exp_gain = round(self.eaten_count * exp_mult)
+        elif mode == "mg5":
+            earned = round(self.score * 0.5 * reward)
+            exp_gain = round(self.score * exp_mult)
+        elif mode == "mg6":
+            earned = round((self.score * 2 + self.mg6_d // 25) * reward)
+            exp_gain = round((self.score + self.mg6_d // 15) * exp_mult)
+        elif mode == "mg7":
+            earned = round(self.score * 1.0 * reward)
+            exp_gain = round(self.score * exp_mult)
+        elif mode == "mg8":
+            if ok:
+                earned = round(35 * reward)
+                exp_gain = round(40 * exp_mult)
+            else:
+                earned = round(self.eaten_count * reward)
+                exp_gain = round(self.eaten_count * exp_mult)
+        elif mode == "mg9":
+            if ok:
+                earned = round((25 + self.score) * reward)
+                exp_gain = round((30 + self.score) * exp_mult)
+            else:
+                earned = round(self.score * 0.5 * reward)
+                exp_gain = round(self.score * exp_mult)
+        elif mode == "mg10":
+            earned = round(self.score * 0.8 * reward)
+            exp_gain = round(self.score * exp_mult)
         else:
             earned = round(self.score * 0.6 * reward)
             exp_gain = round(self.score * exp_mult)
@@ -582,7 +688,9 @@ class GameScreen(Screen):
             st = {}
             self.app.save["stats"] = st
         for k in ("best_score", "coins_earned", "games", "apples",
-                  "mg1_best", "mg2_wins", "mg3_best", "mg3_apples"):
+                  "mg1_best", "mg2_wins", "mg3_best", "mg3_apples",
+                  "mg4_best", "mg5_best", "mg6_best", "mg7_best",
+                  "mg8_wins", "mg9_wins", "mg10_best"):
             st.setdefault(k, 0)
         st["games"] += 1
         st["coins_earned"] += earned
@@ -596,6 +704,15 @@ class GameScreen(Screen):
             st["apples"] += self.delivered
             st["mg3_apples"] += self.delivered
             st["mg3_best"] = max(st["mg3_best"], self.delivered)
+        elif mode in ("mg4", "mg5", "mg6", "mg7", "mg10"):
+            st[mode + "_best"] = max(st[mode + "_best"], self.score)
+            st["apples"] += self.eaten_count
+        elif mode == "mg8":
+            if ok:
+                st["mg8_wins"] += 1
+        elif mode == "mg9":
+            if ok:
+                st["mg9_wins"] += 1
         else:
             st["apples"] += self.eaten_count
             st["best_score"] = max(st["best_score"], self.score)
@@ -629,6 +746,23 @@ class GameScreen(Screen):
             score_line = (f"Доставлено: {self.delivered}      "
                           f"Рекорд: {st['mg3_best']}")
             coin_line = f"+{earned} монет  ({self.delivered} × 12 × {reward:g})"
+        elif mode in ("mg4", "mg5", "mg6", "mg7", "mg10"):
+            score_line = (f"Счёт: {self.score}      "
+                          f"Рекорд: {st[mode + '_best']}")
+            coin_line = f"+{earned} монет"
+            if reward != 1.0:
+                coin_line += f"  (×{reward:g})"
+        elif mode == "mg8":
+            score_line = "Змейка заперта!" if ok else "Она съела всю еду…"
+            coin_line = f"+{earned} монет" if earned else "Без награды"
+            if reward != 1.0 and earned:
+                coin_line += f"  (×{reward:g})"
+        elif mode == "mg9":
+            score_line = ("90 секунд выдержаны!" if ok
+                          else f"Счёт: {self.score}")
+            coin_line = f"+{earned} монет"
+            if reward != 1.0:
+                coin_line += f"  (×{reward:g})"
         else:
             score_line = (f"Счёт: {self.score}      "
                           f"Рекорд: {self.app.save['highscore']}")
@@ -809,6 +943,52 @@ class GameScreen(Screen):
         self._fx_items = []
         self._seg_active = 0
         self._fx_active = 0
+        self._mgsnake_items = []
+        self._mgsnake_active = 0
+        self._tunnel_items = []
+        self._dark_items = []
+        self._mg8_wall_dirty = True
+
+    def _draw_slider(self):
+        c = self.slider
+        c.delete("all")
+        w = COLS * CELL
+        key = self.diff_key if self.diff_key in MG_DIFF_ORDER else "normal"
+        idx = MG_DIFF_ORDER.index(key)
+        seg_w = (w - 24 - 3 * 10) // 4
+        y0, y1 = 4, 22
+        for i, dk in enumerate(MG_DIFF_ORDER):
+            bright, dimc = DIFF_SLIDER[dk]
+            x0 = 12 + i * (seg_w + 10)
+            if i <= idx:
+                round_rect(c, x0, y0, x0 + seg_w, y1, 9, fill=bright,
+                           outline="")
+                if not self.low:
+                    off = (self.tick_count * 3) % (seg_w + 24) - 12
+                    round_rect(c, x0 + off, y0 + 3, x0 + off + 10, y1 - 3, 4,
+                               fill="#ffffff", stipple="gray12", outline="")
+            else:
+                round_rect(c, x0, y0, x0 + seg_w, y1, 9,
+                           fill=blend(dimc, BG, 0.35), outline="")
+        bright = DIFF_SLIDER[key][0]
+        c.create_text(w / 2, 36,
+                      text=f"СЛОЖНОСТЬ: {DIFFICULTIES[key]['label']}",
+                      font=(self.app.font_title, 11, "bold"), fill=bright)
+        c.create_text(w / 2, 55,
+                      text=f"◎ ×{self.cfg['reward']:g}    ⭐ ×{self.cfg['exp_reward']:g}",
+                      font=(self.app.font_ui, 10, "bold"), fill=GOLD)
+        parts = ["проходимые границы" if self.cfg["wrap"]
+                 else "смертельные стены"]
+        if self.cfg.get("obstacles"):
+            parts.append(f"препятствия: {self.cfg['obstacles']}")
+        if self.cfg.get("poison"):
+            parts.append("ядовитые фрукты")
+        if self.cfg.get("time"):
+            parts.append(f"таймер {self.cfg['time']} с")
+        if self.mg and MINIGAMES[self.mg].get("goal"):
+            parts.append(MINIGAMES[self.mg]["goal"])
+        c.create_text(w / 2, 72, text=" · ".join(parts),
+                      font=(self.app.font_ui, 9), fill=DIM)
 
     def _draw_foods(self, phase, simple):
         c = self.canvas
@@ -821,12 +1001,19 @@ class GameScreen(Screen):
                                        self.fruit_colors.get((r, col), RED),
                                        simple)
             else:
+                born = self._food_born.get((r, col), 0)
+                scale = (fd[2] if len(fd) > 2 else 1.0) \
+                    * min(1.0, 0.35 + 0.22 * (self.tick_count - born))
                 draw_food(c, fx, fy, kind, phase, simple=simple,
-                          scale=fd[2] if len(fd) > 2 else 1.0, tags="food")
+                          scale=scale, tags="food")
 
     def _draw(self):
         c = self.canvas
-        c.delete("head", "fx", "overlay")
+        c.delete("head", "fx", "overlay", "mgfx")
+        if self.mg == "mg6":
+            self._mg6_draw()
+        elif self.mg == "mg7":
+            self._mg7_darkness()
         phase = self.tick_count * 0.35
         if self.low:
             if self._foods_dirty:
@@ -912,6 +1099,10 @@ class GameScreen(Screen):
         for x, y, text_, life, color in self.popups:
             c.create_text(x, y, text=text_, font=(self.app.font_ui, 11, "bold"),
                           fill=color, tags="fx")
+
+        if self.mg not in (None, "mg1", "mg2", "mg3"):
+            self._mg_draw_extras()
+        self._draw_slider()
 
         if self.paused:
             round_rect(c, COLS * CELL / 2 - 134, ROWS * CELL / 2 - 38,
