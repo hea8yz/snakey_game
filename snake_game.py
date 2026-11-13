@@ -2,8 +2,17 @@ import colorsys
 import json
 import math
 import random
+import shutil
+import struct
+import subprocess
+import sys
+import threading
+import time
+import wave
+import zlib
 import tkinter as tk
 import tkinter.font as tkfont
+from collections import deque
 from pathlib import Path
 
 CELL = 24
@@ -11,6 +20,9 @@ COLS = 24
 ROWS = 18
 SAVE_FILE = Path.home() / ".snakey_save.json"
 VERSION = "0.8"
+ASSETS_DIR = Path(__file__).resolve().parent / "assets"
+SOUNDS_DIR = ASSETS_DIR / "sounds"
+IMAGES_DIR = ASSETS_DIR / "images"
 
 CHANGELOG = [
     ("0.8", [
@@ -27,6 +39,10 @@ CHANGELOG = [
         "Змейка стала красивее: контур сегментов и плавные градиенты",
         "Режим для слабых ПК отключает все новые анимации и упрощает графику по максимуму",
         "Оптимизация: кэши цветов, пулы объектов, минимум перерисовок",
+        "Иконка игры — минималистичная зелёная змейка (assets/images/icon.png)",
+        "Звуки без авторских прав: фоновая музыка, клики, поедание, смерть, победа, покупка, новый уровень (assets/sounds)",
+        "В настройках можно включить/выключить звуки и музыку по отдельности",
+        "Всплывающие окна (уровень, достижения, update log) — без рамки ОС: своя шапка, перетаскивание, закрытие ✕ и Esc",
     ]),
     ("0.7", [
         "Исправлен экран настроек: теперь он полностью прокручиваемый — все кнопки доступны",
@@ -314,6 +330,363 @@ WINDOW_SIZE_LABELS = {"small": "Маленький", "medium": "Средний",
                       "large": "Большой"}
 WINDOW_SIZE_ORDER = ("small", "medium", "large")
 
+SFX_NAMES = ("click", "eat", "death", "coin", "levelup", "win", "lose")
+SAMPLE_RATE = 22050
+
+
+def _env(i, n, attack=0.01, release=0.35):
+    t = i / max(1, n - 1)
+    a = 1.0 if attack <= 0 else min(1.0, t / attack)
+    r = 1.0 if release <= 0 else min(1.0, (1.0 - t) / release)
+    return a * r
+
+
+def _sweep(dur, f0, f1, amp, harmonics, decay):
+    n = max(1, int(SAMPLE_RATE * dur))
+    norm = sum(a for _, a in harmonics) or 1.0
+    out = []
+    phase = 0.0
+    for i in range(n):
+        t = i / SAMPLE_RATE
+        f = f0 + (f1 - f0) * (i / n)
+        phase += 2.0 * math.pi * f / SAMPLE_RATE
+        s = sum(a * math.sin(phase * h) for h, a in harmonics) / norm
+        out.append(s * amp * math.exp(-decay * t) * _env(i, n, 0.004, 0.08))
+    return out
+
+
+def _make_sfx(name):
+    if name == "click":
+        return _sweep(0.06, 1150, 720, 0.32, ((1, 1.0), (2, 0.25)), 20)
+    if name == "eat":
+        return _sweep(0.13, 320, 980, 0.5, ((1, 1.0), (2, 0.3)), 11)
+    if name == "death":
+        return _sweep(0.7, 430, 60, 0.5, ((1, 1.0), (2, 0.4), (3, 0.25)), 3.2)
+    if name == "coin":
+        return (_sweep(0.09, 1046.5, 1046.5, 0.42, ((1, 1.0), (2, 0.2)), 9)
+                + _sweep(0.2, 1568.0, 1568.0, 0.42, ((1, 1.0), (2, 0.2)), 7))
+    if name == "levelup":
+        out = []
+        for f in (523.25, 659.25, 783.99, 1046.5):
+            out += _sweep(0.14, f, f, 0.4, ((1, 1.0), (2, 0.2)), 6)
+        return out
+    if name == "win":
+        out = []
+        for f in (783.99, 1046.5, 1318.5):
+            out += _sweep(0.16, f, f, 0.42, ((1, 1.0), (2, 0.2)), 5)
+        return out
+    if name == "lose":
+        out = []
+        for f in (329.63, 261.63, 220.0):
+            out += _sweep(0.18, f, f * 0.97, 0.42, ((1, 1.0),), 5)
+        return out
+    return []
+
+
+def _make_music():
+    beat = 0.6
+    bar_s = beat * 4
+    bars = 4
+    total = int(SAMPLE_RATE * bar_s * bars)
+    out = [0.0] * total
+    chords = ((220.0, 261.63, 329.63), (174.61, 220.0, 261.63),
+              (261.63, 329.63, 392.0), (196.0, 246.94, 293.66))
+    bass = (110.0, 87.31, 130.81, 98.0)
+    melody = (440.0, 523.25, 659.25, 523.25, 440.0, 392.0, 440.0, 523.25,
+              659.25, 784.0, 659.25, 523.25, 440.0, 392.0, 329.63, 392.0)
+    nbar = int(SAMPLE_RATE * bar_s)
+    nbeat = int(SAMPLE_RATE * beat)
+    for b in range(bars):
+        start = b * nbar
+        for j in range(nbar):
+            t = j / SAMPLE_RATE
+            pad = 0.0
+            for f in chords[b]:
+                pad += math.sin(2 * math.pi * f * t)
+            out[start + j] += pad * 0.05 * _env(j, nbar, 0.18, 0.3)
+        for k in range(4):
+            s0 = start + k * nbeat
+            nd = int(nbeat * 0.9)
+            for j in range(nd):
+                t = j / SAMPLE_RATE
+                out[s0 + j] += (0.16 * math.sin(2 * math.pi * bass[b] * t)
+                                * math.exp(-6 * t)
+                                * _env(j, nd, 0.004, 0.1))
+            f = melody[(b * 4 + k) % len(melody)]
+            s0 = start + int((k + 0.5) * nbeat)
+            nd = int(nbeat * 0.8)
+            if s0 + nd > total:
+                continue
+            for j in range(nd):
+                t = j / SAMPLE_RATE
+                out[s0 + j] += (0.07 * math.sin(2 * math.pi * f * t)
+                                * math.exp(-7 * t))
+    peak = max(abs(s) for s in out) or 1.0
+    if peak > 0.85:
+        k = 0.85 / peak
+        out = [s * k for s in out]
+    return out
+
+
+def _wav_write(path, samples):
+    frames = b"".join(
+        struct.pack("<h", max(-32768, min(32767, int(s * 32767))))
+        for s in samples)
+    with wave.open(str(path), "wb") as f:
+        f.setnchannels(1)
+        f.setsampwidth(2)
+        f.setframerate(SAMPLE_RATE)
+        f.writeframes(frames)
+
+
+def _png_write(path, size, rows):
+    def chunk(tag, data):
+        blob = tag + data
+        return (struct.pack(">I", len(data)) + blob
+                + struct.pack(">I", zlib.crc32(blob) & 0xFFFFFFFF))
+
+    raw = b"".join(b"\x00" + row for row in rows)
+    path.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(raw, 9))
+        + chunk(b"IEND", b""))
+
+
+def _icon_rows(size=128, ss=3):
+    n = size * ss
+    half = n / 2.0
+    rad = 30 * ss
+    grid = {}
+
+    def inside(x, y):
+        qx = abs(x + 0.5 - half) - (half - rad)
+        qy = abs(y + 0.5 - half) - (half - rad)
+        if qx <= 0 or qy <= 0:
+            return True
+        return qx * qx + qy * qy <= rad * rad
+
+    def stamp(cx, cy, r, col):
+        r2 = r * r
+        x0 = max(0, int(cx - r) - 1)
+        x1 = min(n - 1, int(cx + r) + 1)
+        y0 = max(0, int(cy - r) - 1)
+        y1 = min(n - 1, int(cy + r) + 1)
+        for yy in range(y0, y1 + 1):
+            dy2 = (yy + 0.5 - cy) ** 2
+            row = grid.setdefault(yy, {})
+            for xx in range(x0, x1 + 1):
+                dx = xx + 0.5 - cx
+                if dx * dx + dy2 <= r2:
+                    row[xx] = col
+
+    steps = 110
+    pts = []
+    for i in range(steps + 1):
+        t = i / steps
+        x = (97 - 72 * t) * ss
+        y = (64 + 21 * math.sin(t * 4.4 + 0.5)) * ss
+        frac = 1.0 - 0.45 * t
+        col = (int(31 + (124 - 31) * frac),
+               int(122 + (252 - 122) * frac),
+               int(61 + (154 - 61) * frac))
+        pts.append((x, y, (13.0 - 5.5 * t) * ss, col))
+    for x, y, r, col in reversed(pts):
+        stamp(x, y, r, col)
+    hx, hy = pts[0][0], pts[0][1]
+    hr = 16.5 * ss
+    stamp(hx, hy, hr, (124, 252, 154))
+    dxn, dyn = -72.0, 21 * 4.4 * math.cos(0.5)
+    dl = math.hypot(dxn, dyn) or 1.0
+    dxn, dyn = dxn / dl, dyn / dl
+    pxn, pyn = -dyn, dxn
+    for side in (-1, 1):
+        ex = hx + dxn * hr * 0.30 + pxn * side * hr * 0.42
+        ey = hy + dyn * hr * 0.30 + pyn * side * hr * 0.42
+        stamp(ex, ey, 4.6 * ss, (245, 250, 245))
+        stamp(ex + dxn * 2.2 * ss, ey + dyn * 2.2 * ss, 2.3 * ss, (16, 32, 22))
+    stamp(100 * ss, 27 * ss, 6.2 * ss, (232, 58, 58))
+    stamp(98.4 * ss, 25.4 * ss, 1.8 * ss, (255, 190, 190))
+    stamp(103.5 * ss, 21.5 * ss, 2.2 * ss, (46, 160, 67))
+    bg = (16, 32, 24)
+    rows = []
+    for oy in range(size):
+        row = bytearray()
+        for ox in range(size):
+            rs = gs = bs = a = 0
+            for yy in range(oy * ss, (oy + 1) * ss):
+                grow = grid.get(yy)
+                for xx in range(ox * ss, (ox + 1) * ss):
+                    if not inside(xx, yy):
+                        continue
+                    a += 1
+                    col = grow.get(xx) if grow else None
+                    if col is None:
+                        col = bg
+                    rs += col[0]
+                    gs += col[1]
+                    bs += col[2]
+            if a:
+                row += bytes((rs // a, gs // a, bs // a, 255))
+            else:
+                row += bytes((0, 0, 0, 0))
+        rows.append(bytes(row))
+    return rows
+
+
+def _make_icon(path):
+    _png_write(path, 128, _icon_rows())
+
+
+def ensure_assets():
+    try:
+        SOUNDS_DIR.mkdir(parents=True, exist_ok=True)
+        IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+        icon = IMAGES_DIR / "icon.png"
+        if not icon.exists():
+            _make_icon(icon)
+        for name in SFX_NAMES + ("bg_music",):
+            p = SOUNDS_DIR / f"{name}.wav"
+            if not p.exists():
+                samples = _make_music() if name == "bg_music" \
+                    else _make_sfx(name)
+                _wav_write(p, samples)
+    except OSError:
+        pass
+
+
+class SoundManager:
+    def __init__(self, save=None):
+        self.save = save if save is not None else {}
+        self._proc = deque()
+        self._music_proc = None
+        self._music_thread = None
+        self._music_on = False
+        self._winmm = None
+        self._winsound = None
+        self._backend = None
+        if sys.platform == "win32":
+            try:
+                import winsound
+                self._winsound = winsound
+                self._backend = "winsound"
+            except Exception:
+                self._backend = None
+            return
+        for cand in ("afplay", "aplay", "paplay"):
+            if shutil.which(cand):
+                self._backend = cand
+                break
+
+    def play(self, name):
+        if not self.save.get("sound", True) or not self._backend:
+            return
+        path = SOUNDS_DIR / f"{name}.wav"
+        if not path.exists():
+            return
+        try:
+            if self._backend == "winsound":
+                w = self._winsound
+                w.PlaySound(str(path),
+                            w.SND_FILENAME | w.SND_ASYNC
+                            | w.SND_NODEFAULT)
+            else:
+                self._prune()
+                proc = subprocess.Popen(
+                    [self._backend, str(path)], stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL)
+                self._proc.append(proc)
+        except Exception:
+            pass
+
+    def _prune(self):
+        while self._proc and self._proc[0].poll() is not None:
+            self._proc.popleft()
+        while len(self._proc) > 8:
+            old = self._proc.popleft()
+            try:
+                old.terminate()
+            except Exception:
+                pass
+
+    def _mci_open(self, path):
+        try:
+            import ctypes
+            winmm = ctypes.windll.winmm
+            winmm.mciSendStringW(f'open "{path}" alias snakeymusic',
+                                 None, 0, 0)
+            winmm.mciSendStringW("play snakeymusic repeat", None, 0, 0)
+            return winmm
+        except Exception:
+            return None
+
+    def _music_loop(self, path):
+        while self._music_on:
+            try:
+                proc = subprocess.Popen(
+                    [self._backend, str(path)], stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL)
+            except OSError:
+                return
+            self._music_proc = proc
+            while self._music_on and proc.poll() is None:
+                time.sleep(0.2)
+            if self._music_on and proc.poll() is None:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+
+    def start_music(self):
+        if self._music_on or not self.save.get("music", True):
+            return
+        path = SOUNDS_DIR / "bg_music.wav"
+        if not path.exists():
+            return
+        self._music_on = True
+        if sys.platform == "win32":
+            self._winmm = self._mci_open(path)
+            if self._winmm is None:
+                self._music_on = False
+        elif self._backend:
+            self._music_thread = threading.Thread(
+                target=self._music_loop, args=(path,), daemon=True)
+            self._music_thread.start()
+        else:
+            self._music_on = False
+
+    def stop_music(self):
+        self._music_on = False
+        if self._winmm is not None:
+            try:
+                self._winmm.mciSendStringW("stop snakeymusic", None, 0, 0)
+                self._winmm.mciSendStringW("close snakeymusic", None, 0, 0)
+            except Exception:
+                pass
+            self._winmm = None
+        proc = self._music_proc
+        self._music_proc = None
+        if proc is not None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+
+    def set_music(self, on):
+        if on:
+            self._music_on = False
+            self.start_music()
+        else:
+            self.stop_music()
+
+
+SOUND = None
+
+
+def sfx(name):
+    if SOUND is not None:
+        SOUND.play(name)
+
 MINIGAMES = {
     "mg1": {
         "label": "СБОР ЯБЛОК",
@@ -541,6 +914,8 @@ DEFAULT_SAVE = {
     "mg1_diff": "normal",
     "low_spec": False,
     "window_size": "medium",
+    "sound": True,
+    "music": True,
     "stats": {},
     "ach_done": [],
     "pending_ach": [],
@@ -1199,6 +1574,7 @@ class RoundButton(tk.Canvas):
         self._paint(self.base_bg)
         if 0 <= event.x <= self._width and 0 <= event.y <= self._height \
                 and self.command:
+            sfx("click")
             self.command()
 
 
@@ -1294,6 +1670,51 @@ class Screen(tk.Frame):
         x = max(0, (sw - ww) // 2)
         y = max(0, (sh - wh) // 2 - 20)
         win.geometry(f"+{x}+{y}")
+
+    def _borderless(self, win, title, width, wbg, on_close=None):
+        close = on_close or win.destroy
+        win.title(title)
+        try:
+            win.overrideredirect(True)
+            if not win.overrideredirect():
+                return None
+        except Exception:
+            return None
+        bar = tk.Canvas(win, width=width, height=42, bg=wbg,
+                        highlightthickness=0)
+        bar.pack(fill="x")
+        round_rect(bar, 1, 1, width - 2, 41, 12, fill=PANEL, outline=BORDER)
+        bar.create_oval(14, 13, 28, 27, fill=ACCENT, outline="")
+        bar.create_text(38, 21, text=title, anchor="w",
+                        font=(self.app.font_ui, 11, "bold"), fill=TEXT)
+        bar.create_oval(width - 34, 10, width - 12, 32,
+                        fill=blend(PANEL, "#ffffff", 0.08), outline=BORDER)
+        bar.create_text(width - 23, 21, text="\u2715",
+                        font=(self.app.font_ui, 10, "bold"), fill=DIM)
+        state = {"off": None}
+
+        def press(event):
+            if event.x >= width - 36:
+                close()
+                return
+            state["off"] = (event.x, event.y)
+            win.focus_force()
+
+        def drag(event):
+            off = state["off"]
+            if off is not None:
+                win.geometry(f"+{event.x_root - off[0]}"
+                             f"+{event.y_root - off[1]}")
+
+        bar.bind("<Button-1>", press)
+        bar.bind("<B1-Motion>", drag)
+        bar.bind("<ButtonRelease-1>",
+                 lambda e: state.__setitem__("off", None))
+        try:
+            win.bind("<Escape>", lambda e: close())
+        except Exception:
+            pass
+        return bar
 
 
 class MenuScreen(Screen):
@@ -1496,6 +1917,7 @@ class MenuScreen(Screen):
             return True
         self.app.save["pending_level"] = 0
         self.app.commit()
+        sfx("levelup")
         unlocked = [f"\u0421\u043b\u043e\u0436\u043d\u043e\u0441\u0442\u044c \u00ab{cfg['label']}\u00bb"
                     for cfg in DIFFICULTIES.values() if cfg["level"] == pending]
         for item in THEMES:
@@ -1513,6 +1935,7 @@ class MenuScreen(Screen):
         win.configure(bg=BG)
         win.resizable(False, False)
         win.transient(self.app)
+        self._borderless(win, "\u2728 \u041d\u043e\u0432\u044b\u0439 \u0443\u0440\u043e\u0432\u0435\u043d\u044c!", 380, BG)
         cv = tk.Canvas(win, width=380, height=210, bg=BG, highlightthickness=0)
         cv.pack()
         cx, cyc = 190, 106
@@ -1556,12 +1979,14 @@ class MenuScreen(Screen):
             return True
         self.app.save["pending_ach"] = []
         self.app.commit()
+        sfx("win")
         win = tk.Toplevel(self)
         self._ach_win = win
         win.title("\u0414\u043e\u0441\u0442\u0438\u0436\u0435\u043d\u0438\u0435 \u043f\u043e\u043b\u0443\u0447\u0435\u043d\u043e!")
         win.configure(bg=BG)
         win.resizable(False, False)
         win.transient(self.app)
+        self._borderless(win, "\u2605 \u0414\u043e\u0441\u0442\u0438\u0436\u0435\u043d\u0438\u0435 \u043f\u043e\u043b\u0443\u0447\u0435\u043d\u043e!", 380, BG)
         cv = tk.Canvas(win, width=380, height=170, bg=BG, highlightthickness=0)
         cv.pack()
         cx, cyc = 190, 78
@@ -1627,6 +2052,11 @@ class MenuScreen(Screen):
         win.configure(bg=wbg)
         win.resizable(False, False)
         win.transient(self.app)
+
+        def close():
+            win.destroy()
+
+        self._borderless(win, "Update log \u2014 SNAKEY", 560, wbg, on_close=close)
         cv = tk.Canvas(win, width=560, height=88, bg=wbg, highlightthickness=0)
         cv.pack()
         gradient_bands(cv, 0, 0, 560, 88, wbg, "#16233a", 12)
@@ -1655,9 +2085,6 @@ class MenuScreen(Screen):
         canvas.create_window((0, 0), window=inner, anchor="nw", width=540)
         inner.bind("<Configure>",
                    lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-
-        def close():
-            win.destroy()
 
         for ver, items in CHANGELOG:
             pill = tk.Canvas(inner, width=540, height=30, bg=wbg,
@@ -1851,6 +2278,8 @@ class ShopCard(tk.Canvas):
             elif self.kind == "acc":
                 s["accessory"] = iid
             self.app.commit()
+            sfx("click")
+            self.app.commit()
             self.refresh("\u0412\u044b\u0431\u0440\u0430\u043d\u043e!")
             return
         if s["coins"] < self.item["price"]:
@@ -1868,6 +2297,9 @@ class ShopCard(tk.Canvas):
             s["accessory"] = iid
         else:
             s["owned_foods"].append(iid)
+        check_achievements(s)
+        self.app.commit()
+        sfx("coin")
         check_achievements(s)
         self.app.commit()
         self.refresh(f"\u041a\u0443\u043f\u043b\u0435\u043d\u043e: {self.item['name']}!")
@@ -2010,6 +2442,14 @@ class SettingsScreen(Screen):
             self.inner, "", self._toggle_low, width=380, height=42,
             app_bg=self.mid, font=(app.font_ui, 10, "bold"))
         self.low_btn.pack(pady=(2, 4))
+        self.sound_btn = RoundButton(
+            self.inner, "", self._toggle_sound, width=380, height=42,
+            app_bg=self.mid, font=(app.font_ui, 10, "bold"))
+        self.sound_btn.pack(pady=(2, 4))
+        self.music_btn = RoundButton(
+            self.inner, "", self._toggle_music, width=380, height=42,
+            app_bg=self.mid, font=(app.font_ui, 10, "bold"))
+        self.music_btn.pack(pady=(2, 4))
         tk.Label(self.inner,
                  text="Упрощает фон и графику для слабых устройств,"
                       " не меняя правила игры",
@@ -2054,9 +2494,47 @@ class SettingsScreen(Screen):
         self.app.commit()
         self._paint_low()
 
+    def _paint_sound(self):
+        on = bool(self.app.save.get("sound", True))
+        btn = self.sound_btn
+        btn.text = ("Звуковые эффекты:  ВКЛ ✓" if on
+                    else "Звуковые эффекты:  ВЫКЛ ✗")
+        btn.base_bg = ACCENT_DARK if on else PANEL
+        btn.base_fg = "#c9ffd4" if on else TEXT
+        btn.hover_bg = blend(btn.base_bg, "#ffffff", 0.12)
+        btn.press_bg = blend(btn.base_bg, "#000000", 0.18)
+        btn.repaint()
+
+    def _toggle_sound(self):
+        self.app.save["sound"] = not self.app.save.get("sound", True)
+        self.app.commit()
+        self._paint_sound()
+
+    def _paint_music(self):
+        on = bool(self.app.save.get("music", True))
+        btn = self.music_btn
+        btn.text = "Фоновая музыка:  ВКЛ ✓" if on \
+            else "Фоновая музыка:  ВЫКЛ ✗"
+        btn.base_bg = ACCENT_DARK if on else PANEL
+        btn.base_fg = "#c9ffd4" if on else TEXT
+        btn.hover_bg = blend(btn.base_bg, "#ffffff", 0.12)
+        btn.press_bg = blend(btn.base_bg, "#000000", 0.18)
+        btn.repaint()
+
+    def _toggle_music(self):
+        on = not self.app.save.get("music", True)
+        self.app.save["music"] = on
+        self.app.commit()
+        self._paint_music()
+        snd = getattr(self.app, "sound", None)
+        if snd is not None:
+            snd.set_music(on)
+
     def _rebuild(self, status=""):
         self.status_var.set(status)
         self._paint_low()
+        self._paint_sound()
+        self._paint_music()
         p = self.preview
         p.delete("all")
         sel = self.app.save.get("selected", ACCENT)
@@ -2799,11 +3277,13 @@ class GameScreen(Screen):
                 return
             if self.mg == "mg3":
                 self.carrying = True
+                sfx("eat")
                 self._spawn_mg3_apple()
             else:
                 info = FOOD_BY_ID[eaten[0]]
                 self.eaten_count += 1
                 self.score += info["value"]
+                sfx("eat")
                 self.score_var.set(f"Счёт: {self.score}")
                 self.speed = max(self.cfg["min"], self.speed - self.cfg["step"])
                 px = eaten[1][1] * CELL + CELL / 2
@@ -2844,6 +3324,7 @@ class GameScreen(Screen):
             if (hx - zx) ** 2 + (hy - zy) ** 2 <= MG3_ZONE_R ** 2:
                 self.carrying = False
                 self.delivered += 1
+                sfx("coin")
                 self.score = self.delivered
                 self.score_var.set(f"Яблоки: {self.delivered}")
                 self.popups.append([hx, hy - 14, "+12 ◎", 10, GOLD])
@@ -2870,6 +3351,7 @@ class GameScreen(Screen):
         self.app.save["coins"] -= cost
         self.app.commit()
         self.coins_var.set(f"◉  {self.app.save['coins']}")
+        sfx("coin")
         self.revive_used = True
         mid_y = ROWS // 2
         self.snake = [(mid_y, COLS // 2), (mid_y, COLS // 2 - 1),
@@ -2884,6 +3366,10 @@ class GameScreen(Screen):
     def _end_game(self, title="ИГРА ОКОНЧЕНА", ok=False):
         self.game_over = True
         mode = self.mode
+        if ok:
+            sfx("win")
+        else:
+            sfx("death" if mode == "classic" else "lose")
         reward = self.cfg["reward"] * self.theme.get("bonus", 1.0)
         exp_mult = self.cfg["exp_reward"] * self.theme.get("bonus", 1.0)
         if mode == "mg2":
@@ -3272,6 +3758,10 @@ class App(tk.Tk):
                             "Helvetica")
 
         self.save = load_save()
+        global SOUND
+        self.sound = SoundManager(self.save)
+        SOUND = self.sound
+        self._set_icon()
         self.next_mode = None
         self.next_diff = None
         self.current = "MenuScreen"
@@ -3296,6 +3786,8 @@ class App(tk.Tk):
         self.bind_all("<Button-4>", self._on_wheel)
         self.bind_all("<Button-5>", self._on_wheel)
         self.show("MenuScreen")
+        self.sound.start_music()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def show(self, name):
         self.current = name
@@ -3330,6 +3822,23 @@ class App(tk.Tk):
 
     def commit(self):
         save_save(self.save)
+
+    def _set_icon(self):
+        self._icon_img = None
+        try:
+            p = IMAGES_DIR / "icon.png"
+            if p.exists() and hasattr(tk, "PhotoImage"):
+                self._icon_img = tk.PhotoImage(file=str(p))
+                self.iconphoto(True, self._icon_img)
+        except Exception:
+            self._icon_img = None
+
+    def _on_close(self):
+        try:
+            self.sound.stop_music()
+        except Exception:
+            pass
+        self.destroy()
 
 
 if __name__ == "__main__":
