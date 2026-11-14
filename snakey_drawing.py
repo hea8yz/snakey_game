@@ -211,6 +211,40 @@ def draw_food(c, cx, cy, kind, phase=0.0, tags="", simple=False, scale=1.0):
                           fill="#7cb342", outline="", tags=tags)
         c.create_oval(cx - 1, cy - r - 4, cx + 5, cy - r + 1, fill="#3d5c2a",
                       outline="", tags=tags)
+    elif kind == "cosmo":
+        _fruit_ball(c, cx, cy, r, "#8a5cd9", "#5c3a9e", tags, simple, "#d0b8ff")
+        for k in range(6):
+            ang = math.radians(k * 60 + phase * 25)
+            c.create_line(cx + math.cos(ang) * (r + 2), cy + math.sin(ang) * (r + 2),
+                          cx + math.cos(ang) * (r + 7), cy + math.sin(ang) * (r + 7),
+                          fill="#d0b8ff", width=1, tags=tags)
+        c.create_oval(cx - 1.5, cy - 1.5, cx + 1.5, cy + 1.5, fill="#ffffff",
+                      outline="", tags=tags)
+    elif kind == "phoenix":
+        f = math.sin(phase * 2.5) * 2
+        c.create_polygon(cx - 6, cy + r, cx - 5, cy, cx, cy - r - 3 - f,
+                         cx + 5, cy, cx + 6, cy + r, fill="#ff6a35",
+                         outline="#c2410c", tags=tags)
+        c.create_polygon(cx - 3, cy + r - 1, cx + 3, cy + r - 1, cx, cy - 1,
+                         fill="#ffe14d", outline="", tags=tags)
+        for sx in (-5, 0, 5):
+            c.create_line(cx + sx, cy + r + 1, cx + sx * 1.7, cy + r + 6 + f,
+                          fill="#ff8a3d", width=2, tags=tags)
+    elif kind == "froststar":
+        if not simple:
+            c.create_oval(cx - r - 6, cy - r - 6, cx + r + 6, cy + r + 6,
+                          fill="#a8e8ff", stipple="gray25", outline="", tags=tags)
+        pts = []
+        for k in range(12):
+            rad = r if k % 2 == 0 else r * 0.4
+            a = math.radians(k * 30 - 90 + phase * 12)
+            pts.extend((cx + math.cos(a) * rad, cy + math.sin(a) * rad))
+        c.create_polygon(pts, fill="#a8e8ff", outline="#5fb8d6", tags=tags)
+        c.create_oval(cx - 2.5, cy - 2.5, cx + 0.5, cy + 0.5, fill="#ffffff",
+                      outline="", tags=tags)
+    else:
+        # fallback для любых новых видов еды: обычный шарик
+        _fruit_ball(c, cx, cy, r, "#ff8a3d", "#c25f14", tags, simple, "#ffd9a0")
 def draw_acc(c, cx, cy, kind, phase=0.0, tags=""):
     top = cy - CELL / 2 + 2
     if kind == "santa":
@@ -451,3 +485,31 @@ def draw_acc(c, cx, cy, kind, phase=0.0, tags=""):
             c.create_polygon(cx + sx - 1.5, top + 7, cx + sx + 1.5, top + 7,
                              cx + sx, top + 11, fill="#d0f0ff", outline="",
                              tags=tags)
+    elif kind == "foxy":
+        for sign in (-1, 1):
+            c.create_polygon(cx + sign * 3, top + 4, cx + sign * 10, top + 6,
+                             cx + sign * 7, top - 6,
+                             fill="#ff8a3d", outline="#c25f14", tags=tags)
+            c.create_polygon(cx + sign * 4.5, top + 2.5, cx + sign * 8,
+                             top + 3.5, cx + sign * 7, top - 1,
+                             fill="#ffe14d", outline="", tags=tags)
+    elif kind == "stormcrown":
+        c.create_polygon(cx - 8, top + 7, cx - 8, top - 2, cx - 4, top + 2,
+                         cx, top - 5, cx + 4, top + 2, cx + 8, top - 2,
+                         cx + 8, top + 7, fill="#00c3ff", outline="#0087b0",
+                         tags=tags)
+        c.create_polygon(cx - 1, top - 6, cx + 3, top - 6, cx + 1, top - 1,
+                         cx + 3, top - 1, cx - 2, top + 5, cx, top,
+                         cx - 3, top, fill="#ffe14d", outline="", tags=tags)
+    elif kind == "nova":
+        w_ = 8 + math.sin(phase * 2) * 2
+        c.create_oval(cx - w_, top + 1 - w_, cx + w_, top + 1 + w_,
+                      outline="#ff6a35", width=2, tags=tags)
+        c.create_oval(cx - w_ * 0.55, top + 1 - w_ * 0.55,
+                      cx + w_ * 0.55, top + 1 + w_ * 0.55,
+                      outline="#ffe14d", width=2, tags=tags)
+        c.create_oval(cx - 2.5, top - 1.5, cx + 2.5, top + 3.5, fill="#fff3c4",
+                      outline="", tags=tags)
+    else:
+        c.create_oval(cx - 6, top - 2, cx + 6, top + 8, fill=ACCENT,
+                      outline="#2a8a3a", tags=tags)

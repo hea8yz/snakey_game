@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 
-from snakey_content import ACCESSORIES, COLORS, FOOD_ITEMS, THEMES
+from snakey_content import ACCESSORIES, COLORS, FOOD_ITEMS, MUSIC_TRACKS, THEMES
 from snakey_content import ACHIEVEMENTS
 
 
@@ -26,9 +26,11 @@ def ach_reward_text(ach):
         return f"{r['coins']} монет"
     kind, iid = r["item"]
     table = {"color": COLORS, "theme": THEMES,
-             "food": FOOD_ITEMS, "acc": ACCESSORIES}
+             "food": FOOD_ITEMS, "acc": ACCESSORIES,
+             "music": MUSIC_TRACKS}
     kindname = {"color": "цвет", "theme": "фон",
-                "food": "еда", "acc": "аксессуар"}[kind]
+                "food": "еда", "acc": "аксессуар",
+                "music": "музыка"}[kind]
     name = next(it["name"] for it in table[kind] if it["id"] == iid)
     return f"{kindname} «{name}»"
 def grant_ach_reward(save, ach):
@@ -38,7 +40,8 @@ def grant_ach_reward(save, ach):
     else:
         kind, iid = r["item"]
         key = {"color": "owned", "theme": "owned_themes",
-               "food": "owned_foods", "acc": "owned_acc"}[kind]
+               "food": "owned_foods", "acc": "owned_acc",
+               "music": "owned_music"}[kind]
         lst = save.setdefault(key, [])
         if iid not in lst:
             lst.append(iid)
@@ -73,6 +76,9 @@ DEFAULT_SAVE = {
     "window_size": "medium",
     "sound": True,
     "music": True,
+    "music_track": "classic",
+    "owned_music": ["classic"],
+    "autoupdate": True,
     "stats": {},
     "ach_done": [],
     "pending_ach": [],

@@ -14,6 +14,7 @@ from snakey_content import (
     DIM,
     GRADIENTS,
     LOCKED_BG,
+    MUSIC_TRACKS,
     PANEL,
     TEXT,
     THEMES,
@@ -89,6 +90,17 @@ class SettingsScreen(Screen):
             self.inner, "", self._toggle_music, width=380, height=42,
             app_bg=self.mid, font=(app.font_ui, 10, "bold"))
         self.music_btn.pack(pady=(2, 4))
+        self.au_btn = RoundButton(
+            self.inner, "", self._toggle_au, width=380, height=42,
+            app_bg=self.mid, font=(app.font_ui, 10, "bold"))
+        self.au_btn.pack(pady=(2, 4))
+
+        self._section("Фоновая музыка")
+        self.track_frame = tk.Frame(self.inner, bg=self.mid)
+        self.track_frame.pack()
+        tk.Label(self.inner,
+                 text="Новый трек можно получить за достижения",
+                 bg=self.mid, fg=DIM, font=(app.font_ui, 9)).pack()
         tk.Label(self.inner,
                  text="Упрощает фон и графику для слабых устройств,"
                       " не меняя правила игры",
@@ -169,11 +181,63 @@ class SettingsScreen(Screen):
         if snd is not None:
             snd.set_music(on)
 
+    def _paint_au(self):
+        on = bool(self.app.save.get("autoupdate", True))
+        btn = self.au_btn
+        btn.text = "Автообновление:  ВКЛ ✓" if on else "Автообновление:  ВЫКЛ ✗"
+        btn.base_bg = ACCENT_DARK if on else PANEL
+        btn.base_fg = "#c9ffd4" if on else TEXT
+        btn.hover_bg = blend(btn.base_bg, "#ffffff", 0.12)
+        btn.press_bg = blend(btn.base_bg, "#000000", 0.18)
+        btn.repaint()
+
+    def _toggle_au(self):
+        self.app.save["autoupdate"] = not self.app.save.get("autoupdate", True)
+        self.app.commit()
+        self._paint_au()
+
+    def _paint_tracks(self):
+        for w in self.track_frame.winfo_children():
+            w.destroy()
+        owned = set(self.app.save.get("owned_music", ["classic"]))
+        cur = self.app.save.get("music_track", "classic")
+        for tr in MUSIC_TRACKS:
+            key = tr["id"]
+            selected = key == cur
+            if key in owned:
+                btn = RoundButton(self.track_frame, tr["name"],
+                                  command=(lambda k=key: self._set_track(k)),
+                                  width=170, height=40,
+                                  bg=ACCENT_DARK if selected else PANEL,
+                                  fg="#c9ffd4" if selected else TEXT,
+                                  app_bg=self.mid,
+                                  font=(self.app.font_ui, 10, "bold"))
+            else:
+                btn = RoundButton(self.track_frame,
+                                  f"🔒 {tr['name']}",
+                                  width=170, height=40, bg=LOCKED_BG, fg=DIM,
+                                  app_bg=self.mid,
+                                  font=(self.app.font_ui, 10, "bold"))
+            btn.pack(side="left", padx=4)
+
+    def _set_track(self, key):
+        if key not in set(self.app.save.get("owned_music", ["classic"])):
+            return
+        changed = self.app.save.get("music_track") != key
+        self.app.save["music_track"] = key
+        self.app.commit()
+        self._rebuild()
+        snd = getattr(self.app, "sound", None)
+        if changed and snd is not None and self.app.save.get("music", True):
+            snd.restart_music()
+
     def _rebuild(self, status=""):
         self.status_var.set(status)
         self._paint_low()
         self._paint_sound()
         self._paint_music()
+        self._paint_au()
+        self._paint_tracks()
         p = self.preview
         p.delete("all")
         sel = self.app.save.get("selected", ACCENT)
@@ -188,13 +252,25 @@ class SettingsScreen(Screen):
         p.create_oval(87, 22, 121, 58, outline=ring, width=2)
         if acc != "none":
             draw_acc(p, 104, 40, acc)
-        for w in self.grid_frame.winfo_children():
-            w.destroy()
-        owned_items = [it for it in COLORS if it["id"] in self.app.save["owned"]]
-        for i, item in enumerate(owned_items):
-            card = ShopCard(self.grid_frame, self.app, "color", item,
-                            self._rebuild, card_bg=self.mid)
-            card.grid(row=i // 5, column=i % 5, padx=4, pady=4, sticky="nsew")
+        owned_ids = tuple(sorted(set(self.app.save["owned"])))
+        if getattr(self, "_grid_built", None) == owned_ids:
+            # набор цветов не изменился — только перерисовать карточки
+            for w in self.grid_frame.winfo_children():
+                try:
+                    w._paint()
+                except (AttributeError, tk.TclError):
+                    pass
+        else:
+            self._grid_built = owned_ids
+            for w in self.grid_frame.winfo_children():
+                w.destroy()
+            by_id = {it["id"]: it for it in COLORS}
+            owned_items = [by_id[iid] for iid in owned_ids if iid in by_id]
+            for i, item in enumerate(owned_items):
+                card = ShopCard(self.grid_frame, self.app, "color", item,
+                                self._rebuild, card_bg=self.mid)
+                card.grid(row=i // 5, column=i % 5, padx=4, pady=4,
+                          sticky="nsew")
         level = level_from_exp(self.app.save.get("exp", 0))
         for w in self.diff_frame.winfo_children():
             w.destroy()

@@ -1,4 +1,5 @@
 import random
+import tkinter as tk
 
 from snakey_assets import sfx
 from snakey_content import (
@@ -39,6 +40,8 @@ class MinigameMixin:
             self._mg4_draw()
         elif self.mg == "mg5":
             self._mg5_draw()
+        elif self.mg == "mg6":
+            self._mg6_timer_draw()
         elif self.mg == "mg8":
             self._mg8_draw()
         elif self.mg == "mg9":
@@ -139,7 +142,9 @@ class MinigameMixin:
 
     def _mg5_setup(self):
         self._spawn_food("apple")
-        self._spawn_food("golden")
+        # золотая еда теперь редкая: шанс 35% на старте
+        if random.random() < 0.35:
+            self._spawn_food("golden")
         self.mg5_t = 0.0
 
     def _mg5_after(self):
@@ -165,8 +170,8 @@ class MinigameMixin:
         self.direction = (0, 0)
         self.next_direction = (0, 0)
         self._dir_queue.clear()
-        for _ in range(2):
-            self._mg6_spawn_apple()
+        self._mg6_timer_items = []
+        self._mg6_timer_val = None
 
     def _mg6_seg(self, d):
         seg = self.mg6_corridor.get(d)
@@ -184,14 +189,6 @@ class MinigameMixin:
         self.mg6_corridor[d] = seg
         return seg
 
-    def _mg6_spawn_apple(self):
-        col = random.randint(self.mg6_col + 6, COLS - 2)
-        center, hw = self._mg6_seg(self.mg6_d + col)
-        row = random.randint(center - hw, center + hw)
-        self.foods.append(("apple", (row, col), 1.0))
-        self._food_born[(row, col)] = self.tick_count
-        self._foods_dirty = True
-
     def _mg6_tick(self):
         self.mg6_d += 1
         dr, _dc = self.direction
@@ -202,27 +199,54 @@ class MinigameMixin:
                 self._end_game()
                 return
             self.snake.insert(0, new_head)
-            eaten = next((f for f in self.foods if f[1] == new_head), None)
-            if eaten is not None:
-                self.foods.remove(eaten)
-                self._foods_dirty = True
-                self.score += 1
-                sfx("eat")
-                self.score_var.set(f"Счёт: {self.score}")
-                self._mg6_spawn_apple()
-            else:
-                self.snake.pop()
+            self.snake.pop()
         center, hw = self._mg6_seg(self.mg6_d + self.mg6_col)
         if not center - hw <= self.snake[0][0] <= center + hw:
             self._end_game("ВЫЛЕТЕЛ ИЗ ТОННЕЛЯ!")
             return
-        for f in list(self.foods):
-            if f[1][1] < self.mg6_col:
-                self.foods.remove(f)
-                self._foods_dirty = True
-                self._mg6_spawn_apple()
+        # очки = секунды выживания (монеты начисляются за время в _end_game)
+        secs = self.mg6_d * self.speed / 1000.0
+        self.score = secs
+        self.score_var.set(f"Время: {secs:.1f} с")
         self._draw()
         self._schedule()
+
+    def _mg6_timer_draw(self):
+        """Большой золотой таймер под сложностью (в зоне ползунка).
+        Пул из двух text-items, обновляется только при смене значения."""
+        c = getattr(self, "slider", None)
+        if c is None:
+            return
+        secs = getattr(self, "score", 0.0) or 0.0
+        if self._mg6_timer_val is not None \
+                and abs(secs - self._mg6_timer_val) < 0.1 \
+                and self._mg6_timer_items:
+            return
+        self._mg6_timer_val = secs
+        w = c.winfo_width() or 576
+        cy = 60
+        txt = f"{secs:.1f} с"
+        if not self._mg6_timer_items:
+            try:
+                self._mg6_timer_items = [
+                    c.create_text(w / 2 + 2, cy + 2, text=txt,
+                                  font=(self.app.font_title, 22, "bold"),
+                                  fill="#3a2a05"),
+                    c.create_text(w / 2, cy, text=txt,
+                                  font=(self.app.font_title, 22, "bold"),
+                                  fill=GOLD),
+                ]
+            except tk.TclError:
+                self._mg6_timer_items = []
+                return
+        for it in self._mg6_timer_items:
+            try:
+                c.coords(it, w / 2 + (2 if it == self._mg6_timer_items[0] else 0),
+                         cy + (2 if it == self._mg6_timer_items[0] else 0))
+                c.itemconfig(it, text=txt)
+            except tk.TclError:
+                self._mg6_timer_items = []
+                return
 
     def _mg6_draw(self):
         c = self.canvas
@@ -284,34 +308,67 @@ class MinigameMixin:
         self.mg8_build = False
         self.mg8_walls = set()
         self._mg8_wall_dirty = True
+        # стройка мышью: клик по полю ставит блок (только в режиме стройки)
+        try:
+            self.canvas.bind("<Button-1>", self._mg8_canvas_click, add="+")
+        except Exception:
+            pass
+
+    def _mg8_canvas_click(self, event):
+        if self.mg != "mg8" or not getattr(self, "mg8_build", False):
+            return
+        if self.game_over:
+            return
+        col = int(event.x // CELL)
+        row = int(event.y // CELL)
+        if not (0 <= row < ROWS and 0 <= col < COLS):
+            return
+        hr, hc = self.snake[0]
+        self._mg8_place(row - hr, col - hc)
 
     def _mg8_after(self):
         if self.tick_count % self.cfg["ai_every"]:
             return True
         return self._mg8_ai_step()
 
+    def _mg8_bfs_step(self, start, targets, blocked):
+        """Кратчайший путь BFS от start к ближайшей из targets.
+        Возвращает первый шаг пути или None."""
+        if start in targets:
+            return None
+        seen = {start}
+        queue = [(start, None)]
+        qi = 0
+        while qi < len(queue):
+            (r, c), first = queue[qi]
+            qi += 1
+            for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nr, nc = r + dr, c + dc
+                if not (0 <= nr < ROWS and 0 <= nc < COLS):
+                    continue
+                cell = (nr, nc)
+                if cell in seen or cell in blocked:
+                    continue
+                step = first if first is not None else (dr, dc)
+                if cell in targets:
+                    return step
+                seen.add(cell)
+                queue.append((cell, step))
+        return None
+
     def _mg8_ai_step(self):
         head = self.ai_snake[0]
         occupied = (set(self.ai_snake) | self.mg8_walls | set(self.snake))
         options = [(1, 0), (-1, 0), (0, 1), (0, -1)]
         random.shuffle(options)
+        step = None
         target = min(self.foods,
                      key=lambda f: abs(f[1][0] - head[0]) + abs(f[1][1] - head[1]),
                      default=None)
-        step = None
-        if target is not None and random.random() < 0.75:
-            tr, tc = target[1]
-            best = 10 ** 9
-            for d in options:
-                nr, nc = head[0] + d[0], head[1] + d[1]
-                if not (0 <= nr < ROWS and 0 <= nc < COLS):
-                    continue
-                if (nr, nc) in occupied:
-                    continue
-                dist = abs(nr - tr) + abs(nc - tc)
-                if dist < best:
-                    best = dist
-                    step = d
+        if target is not None and random.random() < 0.85:
+            # умный ИИ: идёт по кратчайшему BFS-пути к еде
+            step = self._mg8_bfs_step(head, {target[1]},
+                                      occupied - {target[1]})
         if step is None:
             for d in options:
                 nr, nc = head[0] + d[0], head[1] + d[1]
@@ -395,7 +452,8 @@ class MinigameMixin:
             self._mg8_wall_dirty = False
         self._draw_pool_snakes([(self.ai_snake, "#a1887f", False)])
         self._mg_indicator(
-            f"🍽 {self.ai_ate}/{self.cfg['ai_target']}", WARN, 1)
+            f"🍽 {self.ai_ate}/{self.cfg['ai_target']}  🧱 {self.cfg['build_cost']}",
+            WARN, 1)
         if self.mg8_build:
             c = self.canvas
             c.create_text(COLS * CELL / 2, ROWS * CELL - 14,
@@ -490,27 +548,36 @@ class MinigameMixin:
         return True
 
     def _mg10_move_inactive(self, i):
+        """Неактивная змейка гуляет по всей карте и мешает игроку,
+        но НИКОГДА не вызывает конец игры и не сталкивается с другими."""
         snk = self.mg_snakes[i]
         dr, dc = self.mg_dirs[i]
         hr, hc = snk[0]
-        nr, nc = hr + dr, hc + dc
-        if not (0 <= nr < ROWS and 0 <= nc < COLS):
-            perp = [(dc, dr), (-dc, -dr)]
+        occupied = self._mg10_occupied(i) | set(snk[:-1])
+
+        def free(d):
+            nr, nc = hr + d[0], hc + d[1]
+            return (0 <= nr < ROWS and 0 <= nc < COLS
+                    and (nr, nc) not in occupied)
+
+        # изредка поворачиваем случайно — гуляют по всей карте
+        if random.random() < 0.10:
+            perp = [(dc, dr), (-dc, -dr), (-dr, -dc)]
             random.shuffle(perp)
-            occupied = self._mg10_occupied(i) | set(snk[:-1])
-            nd = next((p for p in perp
-                       if 0 <= hr + p[0] < ROWS and 0 <= hc + p[1] < COLS
-                       and (hr + p[0], hc + p[1]) not in occupied), None)
+            for d in perp:
+                if free(d):
+                    dr, dc = d
+                    break
+        if not free((dr, dc)):
+            perp = [(dc, dr), (-dc, -dr), (-dr, -dc)]
+            random.shuffle(perp)
+            nd = next((d for d in perp if free(d)), None)
             if nd is None:
-                self.mg_dirs[i] = (-dr, -dc)
+                # тупик — просто пропускаем ход (хвост уйдёт, место освободится)
                 return True
             dr, dc = nd
-            self.mg_dirs[i] = nd
-            nr, nc = hr + dr, hc + dc
-        if (nr, nc) in self._mg10_occupied(i):
-            self._end_game("СТОЛКНОВЕНИЕ!")
-            return False
-        snk.insert(0, (nr, nc))
+        self.mg_dirs[i] = (dr, dc)
+        snk.insert(0, (hr + dr, hc + dc))
         snk.pop()
         return True
 

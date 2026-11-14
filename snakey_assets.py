@@ -16,6 +16,12 @@ SOUNDS_DIR = ASSETS_DIR / "sounds"
 IMAGES_DIR = ASSETS_DIR / "images"
 SFX_NAMES = ("click", "eat", "death", "coin", "levelup", "win", "lose")
 SAMPLE_RATE = 22050
+ASSET_VERSION = "2"
+MUSIC_IDS = ("classic", "retro")
+
+
+def _music_file(track):
+    return SOUNDS_DIR / f"music_{track}.wav"
 def _env(i, n, attack=0.01, release=0.35):
     t = i / max(1, n - 1)
     a = 1.0 if attack <= 0 else min(1.0, t / attack)
@@ -79,7 +85,7 @@ def _make_music():
             pad = 0.0
             for f in chords[b]:
                 pad += math.sin(2 * math.pi * f * t)
-            out[start + j] += pad * 0.05 * _env(j, nbar, 0.18, 0.3)
+            out[start + j] += pad * 0.08 * _env(j, nbar, 0.18, 0.3)
         for k in range(4):
             s0 = start + k * nbeat
             nd = int(nbeat * 0.9)
@@ -95,11 +101,75 @@ def _make_music():
                 continue
             for j in range(nd):
                 t = j / SAMPLE_RATE
-                out[s0 + j] += (0.07 * math.sin(2 * math.pi * f * t)
+                out[s0 + j] += (0.12 * math.sin(2 * math.pi * f * t)
                                 * math.exp(-7 * t))
     peak = max(abs(s) for s in out) or 1.0
-    if peak > 0.85:
-        k = 0.85 / peak
+    if peak > 0.95:
+        k = 0.95 / peak
+        out = [s * k for s in out]
+    return out
+def _osc_saw(phase):
+    return 2.0 * (phase % 1.0) - 1.0
+def _osc_square(phase):
+    return 1.0 if (phase % 1.0) < 0.5 else -1.0
+def _make_music_retro():
+    import random as _rnd
+    rng = _rnd.Random(808)
+    beat = 0.5
+    nbeat = int(SAMPLE_RATE * beat)
+    bars = 8
+    total = nbeat * 4 * bars
+    out = [0.0] * total
+    roots = (220.00, 174.61, 261.63, 196.00)
+    lead = (440.0, 523.25, 659.25, 523.25, 440.0, 392.0, 349.23, 392.0,
+            523.25, 659.25, 783.99, 659.25, 523.25, 440.0, 392.0, 329.63)
+    bass_pat = (0, 0, 7, 0, 12, 7, 0, 7)
+    for b in range(bars):
+        root = roots[b % 4]
+        base = b * nbeat * 4
+        for k in range(8):
+            f = root / 2 * (2 ** (bass_pat[k] / 12))
+            s0 = base + k * nbeat // 2
+            nd = int(nbeat * 0.45)
+            ph = 0.0
+            for j in range(nd):
+                ph += f / SAMPLE_RATE
+                t = j / SAMPLE_RATE
+                out[s0 + j] += (0.13 * _osc_saw(ph) * math.exp(-5 * t)
+                                * _env(j, nd, 0.004, 0.06))
+        for k in range(4):
+            f = lead[(b * 4 + k) % len(lead)]
+            s0 = base + k * nbeat
+            nd = int(nbeat * 0.85)
+            ph = 0.0
+            for j in range(nd):
+                ph += f / SAMPLE_RATE
+                t = j / SAMPLE_RATE
+                v = _osc_square(ph) * 0.55 + math.sin(2 * math.pi * f * t) * 0.45
+                out[s0 + j] += (0.085 * v * math.exp(-3.5 * t)
+                                * _env(j, nd, 0.01, 0.15))
+        for k in range(4):
+            s0 = base + k * nbeat
+            nd = int(nbeat * 0.5)
+            if k % 2 == 0:
+                for j in range(nd):
+                    t = j / SAMPLE_RATE
+                    f = 120 * math.exp(-18 * t) + 40
+                    out[s0 + j] += (0.30 * math.sin(2 * math.pi * f * t)
+                                    * math.exp(-14 * t))
+            else:
+                for j in range(nd):
+                    out[s0 + j] += (0.11 * (rng.random() * 2 - 1)
+                                    * math.exp(-22 * (j / SAMPLE_RATE)))
+        for k in range(8):
+            s0 = base + k * nbeat // 2
+            nd = int(nbeat * 0.22)
+            for j in range(nd):
+                out[s0 + j] += (0.05 * (rng.random() * 2 - 1)
+                                * math.exp(-40 * (j / SAMPLE_RATE)))
+    peak = max(abs(s) for s in out) or 1.0
+    if peak > 0.95:
+        k = 0.95 / peak
         out = [s * k for s in out]
     return out
 def _wav_write(path, samples):
@@ -204,6 +274,28 @@ def _icon_rows(size=128, ss=3):
     return rows
 def _make_icon(path):
     _png_write(path, 128, _icon_rows())
+def _music_needs_build():
+    try:
+        marker = ASSETS_DIR / ".version"
+        if not marker.exists() or marker.read_text().strip() != ASSET_VERSION:
+            return True
+    except OSError:
+        return True
+    return any(not _music_file(tr).exists() for tr in MUSIC_IDS)
+def _build_music():
+    for tr, maker in (("classic", _make_music), ("retro", _make_music_retro)):
+        p = _music_file(tr)
+        if not p.exists():
+            _wav_write(p, maker())
+    try:
+        (ASSETS_DIR / ".version").write_text(ASSET_VERSION)
+    except OSError:
+        pass
+def _safe_build_music():
+    try:
+        _build_music()
+    except Exception:
+        pass
 def ensure_assets():
     try:
         SOUNDS_DIR.mkdir(parents=True, exist_ok=True)
@@ -211,20 +303,22 @@ def ensure_assets():
         icon = IMAGES_DIR / "icon.png"
         if not icon.exists():
             _make_icon(icon)
-        for name in SFX_NAMES + ("bg_music",):
+        for name in SFX_NAMES:
             p = SOUNDS_DIR / f"{name}.wav"
             if not p.exists():
-                samples = _make_music() if name == "bg_music" \
-                    else _make_sfx(name)
-                _wav_write(p, samples)
+                _wav_write(p, _make_sfx(name))
     except OSError:
         pass
+    if _music_needs_build():
+        threading.Thread(target=_safe_build_music, daemon=True).start()
 class SoundManager:
     def __init__(self, save=None):
         self.save = save if save is not None else {}
         self._proc = deque()
         self._music_proc = None
+        self._music_path = None
         self._music_thread = None
+        self._music_watchdog = None
         self._music_on = False
         self._winmm = None
         self._winsound = None
@@ -273,16 +367,36 @@ class SoundManager:
             except Exception:
                 pass
 
-    def _mci_open(self, path):
+    def _mci(self, cmd):
         try:
             import ctypes
-            winmm = ctypes.windll.winmm
-            winmm.mciSendStringW(f'open "{path}" alias snakeymusic',
-                                 None, 0, 0)
-            winmm.mciSendStringW("play snakeymusic repeat", None, 0, 0)
-            return winmm
+            if self._winmm is None:
+                self._winmm = ctypes.windll.winmm
+            buf = ctypes.create_unicode_buffer(128)
+            code = self._winmm.mciSendStringW(cmd, buf, 128, 0)
+            return code, buf.value
         except Exception:
-            return None
+            return 1, ""
+
+    def _mci_start(self, path):
+        self._mci('close snakeymusic')
+        code, _ = self._mci(f'open "{path}" type waveaudio alias snakeymusic')
+        if code != 0:
+            return False
+        self._mci("play snakeymusic from 0 repeat")
+        code, mode = self._mci("status snakeymusic mode")
+        return code == 0 and mode == "playing"
+
+    def _mci_watchdog(self):
+        while self._music_on:
+            time.sleep(5.0)
+            if not self._music_on:
+                break
+            code, mode = self._mci("status snakeymusic mode")
+            if code != 0 or mode not in ("playing", "paused"):
+                path = self._music_path
+                if path is not None and Path(path).exists():
+                    self._mci_start(path)
 
     def _music_loop(self, path):
         while self._music_on:
@@ -301,26 +415,41 @@ class SoundManager:
                 except Exception:
                     pass
 
+    def _resolve_music_path(self):
+        track = self.save.get("music_track", "classic")
+        for cand in (track, "classic"):
+            p = _music_file(cand)
+            if p.exists():
+                return p
+        legacy = SOUNDS_DIR / "bg_music.wav"
+        return legacy if legacy.exists() else None
+
     def start_music(self):
         if self._music_on or not self.save.get("music", True):
             return
-        path = SOUNDS_DIR / "bg_music.wav"
-        if not path.exists():
+        path = self._resolve_music_path()
+        if path is None:
             return
+        self._music_path = str(path)
         self._music_on = True
         if sys.platform == "win32":
-            self._winmm = self._mci_open(path)
-            if self._winmm is None:
+            ok = self._mci_start(str(path))
+            if ok:
+                self._music_watchdog = threading.Thread(
+                    target=self._mci_watchdog, daemon=True)
+                self._music_watchdog.start()
+            else:
                 self._music_on = False
         elif self._backend:
             self._music_thread = threading.Thread(
-                target=self._music_loop, args=(path,), daemon=True)
+                target=self._music_loop, args=(str(path),), daemon=True)
             self._music_thread.start()
         else:
             self._music_on = False
 
     def stop_music(self):
         self._music_on = False
+        self._music_path = None
         if self._winmm is not None:
             try:
                 self._winmm.mciSendStringW("stop snakeymusic", None, 0, 0)
@@ -342,6 +471,11 @@ class SoundManager:
             self.start_music()
         else:
             self.stop_music()
+
+    def restart_music(self):
+        self.stop_music()
+        time.sleep(0.05)
+        self.start_music()
 SOUND = None
 def sfx(name):
     if SOUND is not None:

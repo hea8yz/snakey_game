@@ -234,6 +234,9 @@ class GameScreen(MinigameMixin, Screen):
         self.game_over = False
         self.low = bool(self.app.save.get("low_spec", False))
         self._foods_dirty = True
+        self._slider_dirty = True
+        self._mg6_timer_items = []
+        self._mg6_timer_val = None
         self._redraw_static()
         self._draw()
         self._schedule()
@@ -440,6 +443,19 @@ class GameScreen(MinigameMixin, Screen):
             self._dir_queue.append((dr, dc))
 
     def _tick(self):
+        """Обёртка: любая ошибка не останавливает игровой цикл."""
+        try:
+            self._tick_inner()
+        except tk.TclError:
+            # окно уже закрыто/уничтожено — тихо останавливаем цикл
+            self._cancel()
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            if not self.paused and not self.game_over:
+                self._schedule()
+
+    def _tick_inner(self):
         if self.paused or self.game_over:
             return
         self.tick_count += 1
@@ -529,7 +545,8 @@ class GameScreen(MinigameMixin, Screen):
                 px = eaten[1][1] * CELL + CELL / 2
                 py = eaten[1][0] * CELL + CELL / 2
                 self.popups.append([px, py - 10, "+5 ⚡", 10, GOLD])
-                self._spawn_food("golden")
+                if random.random() < 0.25:
+                    self._spawn_food("golden")
             else:
                 info = FOOD_BY_ID[eaten[0]]
                 self.eaten_count += 1
@@ -612,6 +629,9 @@ class GameScreen(MinigameMixin, Screen):
         self.coins_var.set(f"◉  {self.app.save['coins']}")
         sfx("coin")
         self.revive_used = True
+        st = self.app.save.get("stats")
+        if isinstance(st, dict):
+            st["revives"] = st.get("revives", 0) + 1
         mid_y = ROWS // 2
         self.snake = [(mid_y, COLS // 2), (mid_y, COLS // 2 - 1),
                       (mid_y, COLS // 2 - 2)]
@@ -652,8 +672,9 @@ class GameScreen(MinigameMixin, Screen):
             earned = round(self.score * 0.5 * reward)
             exp_gain = round(self.score * exp_mult)
         elif mode == "mg6":
-            earned = round((self.score * 2 + self.mg6_d // 25) * reward)
-            exp_gain = round((self.score + self.mg6_d // 15) * exp_mult)
+            secs = self.score if isinstance(self.score, (int, float)) else 0.0
+            earned = round(secs * 1.2 * reward)
+            exp_gain = round(secs * 0.8 * exp_mult)
         elif mode == "mg7":
             earned = round(self.score * 1.0 * reward)
             exp_gain = round(self.score * exp_mult)
@@ -690,10 +711,21 @@ class GameScreen(MinigameMixin, Screen):
         for k in ("best_score", "coins_earned", "games", "apples",
                   "mg1_best", "mg2_wins", "mg3_best", "mg3_apples",
                   "mg4_best", "mg5_best", "mg6_best", "mg7_best",
-                  "mg8_wins", "mg9_wins", "mg10_best"):
+                  "mg8_wins", "mg9_wins", "mg10_best",
+                  "deaths", "wins", "mg_games", "score_total", "revives"):
             st.setdefault(k, 0)
         st["games"] += 1
         st["coins_earned"] += earned
+        if mode != "classic":
+            st["mg_games"] += 1
+        if ok:
+            st["wins"] += 1
+        else:
+            st["deaths"] += 1
+        try:
+            st["score_total"] += int(self.score)
+        except (TypeError, ValueError):
+            pass
         if mode == "mg1":
             st["apples"] += self.eaten_count
             st["mg1_best"] = max(st["mg1_best"], self.score)
@@ -705,7 +737,8 @@ class GameScreen(MinigameMixin, Screen):
             st["mg3_apples"] += self.delivered
             st["mg3_best"] = max(st["mg3_best"], self.delivered)
         elif mode in ("mg4", "mg5", "mg6", "mg7", "mg10"):
-            st[mode + "_best"] = max(st[mode + "_best"], self.score)
+            best_val = int(self.score) if mode == "mg6" else self.score
+            st[mode + "_best"] = max(st[mode + "_best"], best_val)
             st["apples"] += self.eaten_count
         elif mode == "mg8":
             if ok:
@@ -746,7 +779,11 @@ class GameScreen(MinigameMixin, Screen):
             score_line = (f"Доставлено: {self.delivered}      "
                           f"Рекорд: {st['mg3_best']}")
             coin_line = f"+{earned} монет  ({self.delivered} × 12 × {reward:g})"
-        elif mode in ("mg4", "mg5", "mg6", "mg7", "mg10"):
+        elif mode == "mg6":
+            score_line = (f"Время: {self.score:.1f} с      "
+                          f"Рекорд: {st['mg6_best']} с")
+            coin_line = f"+{earned} монет  ({self.score:.0f} с × {reward:g})"
+        elif mode in ("mg4", "mg5", "mg7", "mg10"):
             score_line = (f"Счёт: {self.score}      "
                           f"Рекорд: {st[mode + '_best']}")
             coin_line = f"+{earned} монет"
@@ -951,25 +988,40 @@ class GameScreen(MinigameMixin, Screen):
 
     def _draw_slider(self):
         c = self.slider
-        c.delete("all")
         w = COLS * CELL
         key = self.diff_key if self.diff_key in MG_DIFF_ORDER else "normal"
         idx = MG_DIFF_ORDER.index(key)
         seg_w = (w - 24 - 3 * 10) // 4
         y0, y1 = 4, 22
-        for i, dk in enumerate(MG_DIFF_ORDER):
-            bright, dimc = DIFF_SLIDER[dk]
-            x0 = 12 + i * (seg_w + 10)
-            if i <= idx:
-                round_rect(c, x0, y0, x0 + seg_w, y1, 9, fill=bright,
-                           outline="")
-                if not self.low:
-                    off = (self.tick_count * 3) % (seg_w + 24) - 12
-                    round_rect(c, x0 + off, y0 + 3, x0 + off + 10, y1 - 3, 4,
-                               fill="#ffffff", stipple="gray12", outline="")
-            else:
-                round_rect(c, x0, y0, x0 + seg_w, y1, 9,
-                           fill=blend(dimc, BG, 0.35), outline="")
+        if getattr(self, "_slider_dirty", True):
+            # полная отрисовка только при смене режима/сложности,
+            # дальше каждый тик двигается только полоска-блик
+            self._slider_dirty = False
+            self._mg6_timer_items = []
+            c.delete("all")
+            self._slider_shimmer = []
+            for i, dk in enumerate(MG_DIFF_ORDER):
+                bright, dimc = DIFF_SLIDER[dk]
+                x0 = 12 + i * (seg_w + 10)
+                if i <= idx:
+                    round_rect(c, x0, y0, x0 + seg_w, y1, 9, fill=bright,
+                               outline="")
+                else:
+                    round_rect(c, x0, y0, x0 + seg_w, y1, 9,
+                               fill=blend(dimc, BG, 0.35), outline="")
+            if not self.low:
+                for i in range(idx + 1):
+                    x0 = 12 + i * (seg_w + 10)
+                    self._slider_shimmer.append(
+                        c.create_rectangle(x0, y0 + 3, x0 + 10, y1 - 3,
+                                           fill="#ffffff", stipple="gray12",
+                                           outline="", state="hidden"))
+        if not self.low:
+            for i, it in enumerate(getattr(self, "_slider_shimmer", [])):
+                x0 = 12 + i * (seg_w + 10)
+                off = (self.tick_count * 3) % (seg_w + 24) - 12
+                c.coords(it, x0 + off, y0 + 3, x0 + off + 10, y1 - 3)
+                c.itemconfig(it, state="normal")
         bright = DIFF_SLIDER[key][0]
         c.create_text(w / 2, 36,
                       text=f"СЛОЖНОСТЬ: {DIFFICULTIES[key]['label']}",
@@ -1012,8 +1064,6 @@ class GameScreen(MinigameMixin, Screen):
         c.delete("head", "fx", "overlay", "mgfx")
         if self.mg == "mg6":
             self._mg6_draw()
-        elif self.mg == "mg7":
-            self._mg7_darkness()
         phase = self.tick_count * 0.35
         if self.low:
             if self._foods_dirty:
@@ -1021,8 +1071,15 @@ class GameScreen(MinigameMixin, Screen):
                 self._draw_foods(0.0, True)
                 self._foods_dirty = False
         else:
-            c.delete("food")
-            self._draw_foods(phase, False)
+            # перерисовываем еду только когда она изменилась или играет
+            # анимация появления — иначе оставляем как есть (перф)
+            pop_active = any(
+                self.tick_count - self._food_born.get(f[1], 0) < 3
+                for f in self.foods)
+            if self._foods_dirty or pop_active:
+                c.delete("food")
+                self._draw_foods(phase, False)
+                self._foods_dirty = False
 
         sel = self.app.save.get("selected", ACCENT)
         need = len(self.snake)
@@ -1079,6 +1136,9 @@ class GameScreen(MinigameMixin, Screen):
         if self.mg == "mg3" and self.carrying and not self.game_over:
             c.create_oval(cx - 6, cy - 22, cx + 6, cy - 10, fill=RED,
                           outline="#c93a3a", tags="head")
+        if self.mg == "mg7":
+            # тьма рисуется ПОСЛЕ еды и змейки: вне фонарика ничего не видно
+            self._mg7_darkness()
 
         fxp = self._fx_items
         nfx = len(self.particles)

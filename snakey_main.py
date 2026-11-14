@@ -33,6 +33,136 @@ for _m in (_content, _save, _utils, _drawing, _assets, _widgets, _shop,
 
 
 
+# ---------------- Автообновление ----------------
+import os as _os
+import tempfile as _tempfile
+import threading as _threading
+import urllib.request as _urllib_request
+
+REPO_RAW = "https://raw.githubusercontent.com/hea8yz/snakey_game/main/"
+
+
+def _local_version():
+    try:
+        p = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                          "VERSION")
+        with open(p, encoding="utf-8") as f:
+            v = f.read().strip()
+            if v:
+                return v
+    except Exception:
+        pass
+    return "0.9.1"
+
+
+def _version_tuple(v):
+    try:
+        return tuple(int(x) for x in v.replace("v", "").split("."))
+    except Exception:
+        return (0,)
+
+
+def _fetch_text(url, timeout=3):
+    with _urllib_request.urlopen(url, timeout=timeout) as resp:
+        return resp.read().decode("utf-8", "replace")
+
+
+def _apply_update(new_version, app=None):
+    """Скачивает файлы из репозитория во temp и атомарно заменяет их."""
+    base = _os.path.dirname(_os.path.abspath(__file__))
+    try:
+        manifest = _fetch_text(REPO_RAW + "MANIFEST.txt", timeout=5)
+        files = [ln.strip() for ln in manifest.splitlines()
+                 if ln.strip() and not ln.strip().startswith("#")]
+    except Exception:
+        files = []
+    if not files:
+        files = (["VERSION", "MANIFEST.txt", "README.md"]
+                 + [n for n in _os.listdir(base)
+                    if n.startswith("snakey_") and n.endswith(".py")])
+    done = 0
+    for name in files:
+        if "/" in name or chr(92) in name or name.startswith("."):
+            continue
+        tmp = None
+        try:
+            data = _fetch_text(REPO_RAW + name, timeout=10)
+            fd, tmp = _tempfile.mkstemp(dir=base, prefix=".up_",
+                                        suffix=".tmp")
+            with _os.fdopen(fd, "wb") as f:
+                f.write(data.encode("utf-8"))
+            _os.replace(tmp, _os.path.join(base, name))
+            tmp = None
+            done += 1
+        except Exception:
+            pass
+        if tmp is not None:
+            try:
+                _os.unlink(tmp)
+            except OSError:
+                pass
+    if done and app is not None:
+        app.after(0, lambda: _show_update_popup(app, new_version))
+
+
+def _show_update_popup(app, new_version):
+    try:
+        win = tk.Toplevel(app)
+        win.title("SNAKEY — обновление")
+        win.configure(bg="#101820")
+        win.resizable(False, False)
+        try:
+            win.attributes("-topmost", True)
+        except Exception:
+            pass
+        fam = getattr(app, "font_ui", "Helvetica")
+        tk.Label(win, text="✨  Игра обновлена до версии " + new_version + "!",
+                 bg="#101820", fg="#3fff9e",
+                 font=(fam, 13, "bold")).pack(padx=26, pady=(18, 6))
+        tk.Label(win, text="Перезапустите игру, чтобы изменения вступили в силу.",
+                 bg="#101820", fg="#cdd9e5",
+                 font=(fam, 10)).pack(padx=26, pady=(0, 12))
+        tk.Button(win, text="OK", command=win.destroy,
+                  bg="#1f6feb", fg="#ffffff", activebackground="#388bfd",
+                  activeforeground="#ffffff", relief="flat",
+                  font=(fam, 10, "bold"),
+                  padx=18, pady=4).pack(pady=(0, 16))
+        win.update_idletasks()
+        w = max(win.winfo_reqwidth(), 300)
+        h = win.winfo_reqheight()
+        win.geometry(f"{w}x{h}+{(app.winfo_screenwidth() - w) // 2}"
+                     f"+{(app.winfo_screenheight() - h) // 2}")
+        win.lift()
+        win.focus_force()
+    except Exception:
+        pass
+
+
+def start_autoupdate(app):
+    """Фоновая проверка новой версии на GitHub (не блокирует GUI)."""
+    try:
+        if not app.save.get("autoupdate", True):
+            return
+    except Exception:
+        return
+    local = _local_version()
+
+    def worker():
+        try:
+            remote = _fetch_text(REPO_RAW + "VERSION", timeout=3).strip()
+            if not remote or _version_tuple(remote) <= _version_tuple(local):
+                return
+        except Exception:
+            return
+        try:
+            _apply_update(remote, app)
+        except Exception:
+            pass
+
+    _threading.Thread(target=worker, name="snakey-autoupdate",
+                      daemon=True).start()
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -78,6 +208,7 @@ class App(tk.Tk):
         self.bind_all("<Button-5>", self._on_wheel)
         self.show("MenuScreen")
         self.sound.start_music()
+        start_autoupdate(self)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def show(self, name):
