@@ -279,6 +279,8 @@ class ShopScreen(Screen):
         self._cols = 5
         self._cards = []
         self._built_cols = None
+        self._shop_queue = None
+        self._shop_total = 0
 
         RoundButton(self, "\u2190  \u041d\u0430\u0437\u0430\u0434", lambda: app.show("MenuScreen"),
                     width=170, height=40, app_bg=self.bot,
@@ -305,7 +307,8 @@ class ShopScreen(Screen):
     def _rebuild(self, status=""):
         self.coins_var.set(f"\u25c9  {self.app.save['coins']}")
         self.status_var.set(status)
-        if self._built_cols == self._cols and self._cards:
+        if (self._built_cols == self._cols and self._cards
+                and len(self._cards) == self._shop_total):
             # карточки уже созданы — только перерисовать состояние
             for card in self._cards:
                 try:
@@ -314,7 +317,8 @@ class ShopScreen(Screen):
                     self._cards = []
                     self._built_cols = None
                     break
-            if self._built_cols == self._cols and self._cards:
+            if (self._built_cols == self._cols and self._cards
+                    and len(self._cards) == self._shop_total):
                 return
         self._built_cols = self._cols
         close_all_tips()
@@ -327,6 +331,9 @@ class ShopScreen(Screen):
             ("\u0415\u0434\u0430  (\u0434\u043e\u0440\u043e\u0436\u0435 \u0435\u0434\u0430 \u2014 \u0431\u043e\u043b\u044c\u0448\u0435 \u043e\u0447\u043a\u043e\u0432)", "food", FOOD_ITEMS),
             ("\u0410\u043a\u0441\u0435\u0441\u0441\u0443\u0430\u0440\u044b \u0434\u043b\u044f \u0433\u043e\u043b\u043e\u0432\u044b", "acc", ACCESSORIES),
         ]
+        # ~100 карточек строим порциями в фоне: вкладка открывается мгновенно
+        self._shop_queue = []
+        self._cards = []
         for title, kind, items in sections:
             head = tk.Canvas(self.inner, width=770, height=30, bg=self.mid,
                              highlightthickness=0)
@@ -338,12 +345,27 @@ class ShopScreen(Screen):
             grid.pack()
             cols = self._cols
             for i, item in enumerate(items):
-                card = ShopCard(grid, self.app, kind, item,
-                                self._refresh_card_factory(kind),
-                                card_bg=self.mid)
-                card.grid(row=i // cols, column=i % cols, padx=3, pady=3,
-                          sticky="nsew")
-                self._cards.append(card)
+                self._shop_queue.append((kind, item, grid, i, cols))
+        self._shop_total = len(self._shop_queue)
+        self._shop_build_batch()
+
+    def _shop_build_batch(self, batch=12):
+        queue = self._shop_queue
+        if not queue:
+            self._shop_queue = None
+            return
+        for kind, item, grid, i, cols in queue[:batch]:
+            card = ShopCard(grid, self.app, kind, item,
+                            self._refresh_card_factory(kind),
+                            card_bg=self.mid)
+            card.grid(row=i // cols, column=i % cols, padx=3, pady=3,
+                      sticky="nsew")
+            self._cards.append(card)
+        del queue[:batch]
+        try:
+            self.after(1, self._shop_build_batch)
+        except Exception:
+            self._shop_queue = None
 
     def _refresh_card_factory(self, kind):
         return lambda status="": self._refresh_card(status, kind)

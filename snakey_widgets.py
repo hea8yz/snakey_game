@@ -174,14 +174,27 @@ class Screen(tk.Frame):
         return False
 
     @staticmethod
-    def _center_window(win):
+    def _center_window(win, parent=None):
+        """Центрирует окно ПОВЕРХ главного окна игры, а не по центру экрана."""
         win.update_idletasks()
         ww = win.winfo_reqwidth()
         wh = win.winfo_reqheight()
-        sw = win.winfo_screenwidth()
-        sh = win.winfo_screenheight()
-        x = max(0, (sw - ww) // 2)
-        y = max(0, (sh - wh) // 2 - 20)
+        x = y = None
+        try:
+            top = (parent or win.master).winfo_toplevel()
+            pw, ph = top.winfo_width(), top.winfo_height()
+            if pw > 1 and ph > 1:
+                px, py = top.winfo_rootx(), top.winfo_rooty()
+                x = px + max(0, (pw - ww) // 2)
+                y = py + max(0, (ph - wh) // 2 - 20)
+        except Exception:
+            x = y = None
+        if x is None:
+            # главное окно ещё не отображено — центр экрана
+            sw = win.winfo_screenwidth()
+            sh = win.winfo_screenheight()
+            x = max(0, (sw - ww) // 2)
+            y = max(0, (sh - wh) // 2 - 20)
         win.geometry(f"+{x}+{y}")
 
     def _borderless(self, win, title, width, wbg, on_close=None):
