@@ -252,8 +252,8 @@ class SettingsScreen(Screen):
         self.sound_vol.set_value(int(self.app.save.get("sound_volume", 80)))
         on = bool(self.app.save.get("mute", False))
         btn = self.mute_btn
-        btn.text = ("Беззвучный режим:  ВКЛ \u2713" if on
-                    else "Беззвучный режим:  ВЫКЛ \u2717")
+        btn.text = ("Беззвучный режим:  ВКЛ ✓" if on
+                    else "Беззвучный режим:  ВЫКЛ ✗")
         btn.base_bg = ACCENT_DARK if on else PANEL
         btn.base_fg = "#c9ffd4" if on else TEXT
         btn.hover_bg = blend(btn.base_bg, "#ffffff", 0.12)
