@@ -36,6 +36,7 @@ for _m in (_content, _save, _utils, _drawing, _assets, _widgets, _shop,
 
 # ---------------- Автообновление ----------------
 import os as _os
+import subprocess as _subprocess
 import sys as _sys
 import tempfile as _tempfile
 import threading as _threading
@@ -73,13 +74,9 @@ def _fetch_text(url, timeout=3):
         return resp.read().decode("utf-8", "replace")
 
 
-def _apply_update(new_version, app=None):
-    """Скачивает файлы из репозитория во temp и атомарно заменяет их."""
-    if getattr(_sys, "frozen", False):
-        # в exe код зашит внутрь файла — скачивать .py бессмысленно,
-        # предлагаем пересобрать exe через build.bat
-        _show_update_popup(app, new_version, frozen=True)
-        return
+def _download_files(progress=None):
+    """Скачивает файлы из MANIFEST.txt (ветка main) и атомарно заменяет их.
+    Возвращает число успешно обновлённых файлов."""
     base = _os.path.dirname(_os.path.abspath(__file__))
     try:
         manifest = _fetch_text(REPO_RAW + "MANIFEST.txt", timeout=5)
@@ -105,6 +102,11 @@ def _apply_update(new_version, app=None):
             _os.replace(tmp, _os.path.join(base, name))
             tmp = None
             done += 1
+            if progress is not None:
+                try:
+                    progress(name, done, len(files))
+                except Exception:
+                    pass
         except Exception:
             pass
         if tmp is not None:
@@ -112,12 +114,13 @@ def _apply_update(new_version, app=None):
                 _os.unlink(tmp)
             except OSError:
                 pass
-    if done and app is not None:
-        app.after(0, lambda: _show_update_popup(app, new_version))
+    return done
 
 
-def _show_update_popup(app, new_version, frozen=False):
+def _show_update_prompt(app, new_version):
+    """Всплывающее окно «пора обновиться» с кнопками «Позже» и «Обновить»."""
     try:
+        frozen = getattr(_sys, "frozen", False)
         win = tk.Toplevel(app)
         win.title("SNAKEY — обновление")
         win.configure(bg="#101820")
@@ -127,29 +130,48 @@ def _show_update_popup(app, new_version, frozen=False):
         except Exception:
             pass
         fam = getattr(app, "font_ui", "Helvetica")
-        if frozen:
-            tk.Label(win, text="✨  Доступна новая версия " + new_version + "!",
-                     bg="#101820", fg="#3fff9e",
-                     font=(fam, 13, "bold")).pack(padx=26, pady=(18, 6))
-            tk.Label(win, text="Код в exe зашит внутрь: запусти build.bat в папке игры,\n"
-                               "чтобы пересобрать SNAKEY.exe с обновлением.",
-                     bg="#101820", fg="#cdd9e5",
-                     font=(fam, 10)).pack(padx=26, pady=(0, 12))
-        else:
-            tk.Label(win, text="✨  Игра обновлена до версии " + new_version + "!",
-                     bg="#101820", fg="#3fff9e",
-                     font=(fam, 13, "bold")).pack(padx=26, pady=(18, 6))
-            tk.Label(win, text="Перезапустите игру, чтобы изменения вступили в силу.",
-                     bg="#101820", fg="#cdd9e5",
-                     font=(fam, 10)).pack(padx=26, pady=(0, 12))
-        tk.Button(win, text="OK",
-                  command=lambda: (win.destroy(), refocus_app(app)),
+        tk.Label(win, text="✨  Доступна новая версия " + new_version + "!",
+                 bg="#101820", fg="#3fff9e",
+                 font=(fam, 13, "bold")).pack(padx=30, pady=(20, 4))
+        tk.Label(win, text="У тебя версия " + _local_version()
+                           + " — пора обновить игру!",
+                 bg="#101820", fg="#cdd9e5",
+                 font=(fam, 10)).pack(padx=30, pady=(0, 14))
+        btns = tk.Frame(win, bg="#101820")
+        btns.pack(pady=(0, 18))
+
+        def later():
+            win.destroy()
+            refocus_app(app)
+
+        def do_update():
+            if frozen:
+                # код exe нельзя заменить файлами — открываем репозиторий,
+                # где лежит новая версия (или запускается build.bat)
+                try:
+                    import webbrowser
+                    webbrowser.open("https://github.com/hea8yz/snakey_game")
+                except Exception:
+                    pass
+                later()
+                return
+            win.destroy()
+            _update_and_restart(app, new_version)
+
+        tk.Button(btns, text="Позже", command=later,
+                  bg="#30363d", fg="#cdd9e5", activebackground="#3d444d",
+                  activeforeground="#ffffff", relief="flat",
+                  font=(fam, 10, "bold"), padx=16, pady=4,
+                  cursor="hand2").pack(side="left", padx=6)
+        tk.Button(btns, text="⬇  Обновить", command=do_update,
                   bg="#1f6feb", fg="#ffffff", activebackground="#388bfd",
                   activeforeground="#ffffff", relief="flat",
-                  font=(fam, 10, "bold"),
-                  padx=18, pady=4).pack(pady=(0, 16))
+                  font=(fam, 10, "bold"), padx=16, pady=4,
+                  cursor="hand2").pack(side="left", padx=6)
+
+        # центрируем поверх основного окна (как все попапы игры)
         win.update_idletasks()
-        w = max(win.winfo_reqwidth(), 300)
+        w = max(win.winfo_reqwidth(), 340)
         h = win.winfo_reqheight()
         try:
             px, py = app.winfo_rootx(), app.winfo_rooty()
@@ -169,6 +191,82 @@ def _show_update_popup(app, new_version, frozen=False):
         pass
 
 
+def _restart_game():
+    """Запускает игру заново (после обновления) и завершает текущий процесс."""
+    try:
+        if getattr(_sys, "frozen", False):
+            _subprocess.Popen([_sys.executable], close_fds=True)
+        else:
+            _subprocess.Popen([_sys.executable, _os.path.abspath(__file__)],
+                              close_fds=True)
+    except Exception:
+        pass
+    try:
+        _sys.exit(0)
+    except Exception:
+        _os._exit(0)
+
+
+def _update_and_restart(app, new_version):
+    """Закрывает игру, скачивает файлы из репозитория и запускает игру заново."""
+    try:
+        app.destroy()
+    except Exception:
+        pass
+    root = None
+    lbl = None
+    try:
+        root = tk.Tk()
+        root.title("SNAKEY — обновление")
+        root.configure(bg="#101820")
+        root.resizable(False, False)
+        try:
+            root.attributes("-topmost", True)
+        except Exception:
+            pass
+        lbl = tk.Label(root, text="⬇  Обновляю игру до версии "
+                                  + new_version + "...",
+                       bg="#101820", fg="#3fff9e",
+                       font=("Helvetica", 12, "bold"))
+        lbl.pack(padx=44, pady=34)
+        root.update_idletasks()
+        w, h = root.winfo_reqwidth(), root.winfo_reqheight()
+        root.geometry(f"{w}x{h}+{max(0, (root.winfo_screenwidth() - w) // 2)}"
+                      f"+{max(0, (root.winfo_screenheight() - h) // 2)}")
+        root.update()
+    except Exception:
+        pass
+
+    def note(msg, col="#3fff9e"):
+        if lbl is not None:
+            try:
+                lbl.config(text=msg, fg=col)
+                if root is not None:
+                    root.update()
+            except Exception:
+                pass
+
+    try:
+        done = _download_files()
+    except Exception:
+        done = 0
+    if done:
+        note("✓  Готово! Запускаю обновлённую игру...")
+    else:
+        note("⚠  Не удалось скачать обновление (нет интернета?).\n"
+             "Открываю игру в текущей версии.", "#ffd75c")
+
+    # короткая пауза, чтобы текст было видно, затем перезапуск
+    try:
+        if root is not None:
+            root.after(1600 if done else 2600, _restart_game)
+            root.mainloop()
+            return
+    except Exception:
+        pass
+    _restart_game()
+
+
 def start_autoupdate(app):
     """Фоновая проверка новой версии на GitHub (не блокирует GUI)."""
     try:
@@ -186,7 +284,7 @@ def start_autoupdate(app):
         except Exception:
             return
         try:
-            _apply_update(remote, app)
+            app.after(0, lambda: _show_update_prompt(app, remote))
         except Exception:
             pass
 
