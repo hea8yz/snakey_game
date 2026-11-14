@@ -1,5 +1,6 @@
 import shutil
 import struct
+import array
 import subprocess
 import sys
 import threading
@@ -17,7 +18,8 @@ IMAGES_DIR = ASSETS_DIR / "images"
 SFX_NAMES = ("click", "eat", "death", "coin", "levelup", "win", "lose")
 SAMPLE_RATE = 22050
 ASSET_VERSION = "2"
-MUSIC_IDS = ("classic", "retro")
+MUSIC_IDS = ("classic", "retro", "chiptune", "ambient", "funk", "arcade")
+VOL_STEPS = 10  # громкость квантуется в 10 шагов (0..10) для кэша wav-вариантов
 
 
 def _music_file(track):
@@ -172,6 +174,205 @@ def _make_music_retro():
         k = 0.95 / peak
         out = [s * k for s in out]
     return out
+def _normalize(out):
+    peak = max(abs(s) for s in out) or 1.0
+    if peak > 0.95:
+        k = 0.95 / peak
+        out = [s * k for s in out]
+    return out
+def _make_music_chiptune():
+    # быстрый весёлый 8-бит: квадратное арпеджио, пила-бас, шумовые хэты
+    import random as _rnd
+    rng = _rnd.Random(4242)
+    beat = 0.34
+    nbeat = int(SAMPLE_RATE * beat)
+    bars = 8
+    total = nbeat * 4 * bars
+    out = [0.0] * total
+    roots = (261.63, 196.00, 220.00, 174.61)
+    lead = (523.25, 659.25, 783.99, 659.25, 523.25, 587.33, 523.25, 392.0,
+            440.0, 523.25, 659.25, 523.25, 783.99, 880.0, 783.99, 659.25)
+    arp = (0, 4, 7, 12)
+    for b in range(bars):
+        root = roots[b % 4]
+        base = b * nbeat * 4
+        for k in range(16):
+            f = root * (2 ** (arp[k % 4] / 12))
+            s0 = base + k * nbeat // 4
+            nd = int(nbeat * 0.22)
+            ph = 0.0
+            for j in range(nd):
+                ph += f / SAMPLE_RATE
+                out[s0 + j] += 0.05 * _osc_square(ph) * _env(j, nd, 0.004, 0.05)
+        for k in range(8):
+            f = root / 2
+            s0 = base + k * nbeat // 2
+            nd = int(nbeat * 0.4)
+            ph = 0.0
+            for j in range(nd):
+                ph += f / SAMPLE_RATE
+                t = j / SAMPLE_RATE
+                out[s0 + j] += (0.12 * _osc_saw(ph) * math.exp(-7 * t)
+                                * _env(j, nd, 0.004, 0.05))
+        for k in range(4):
+            f = lead[(b * 4 + k) % len(lead)]
+            s0 = base + k * nbeat
+            nd = int(nbeat * 0.9)
+            ph = 0.0
+            for j in range(nd):
+                ph += f / SAMPLE_RATE
+                t = j / SAMPLE_RATE
+                v = _osc_square(ph) * 0.6 + math.sin(2 * math.pi * f * t) * 0.4
+                out[s0 + j] += (0.085 * v * math.exp(-3 * t)
+                                * _env(j, nd, 0.008, 0.12))
+        for k in range(4):
+            s0 = base + k * nbeat
+            nd = int(nbeat * 0.4)
+            if k % 2 == 0:
+                for j in range(nd):
+                    t = j / SAMPLE_RATE
+                    f = 150 * math.exp(-20 * t) + 45
+                    out[s0 + j] += (0.24 * math.sin(2 * math.pi * f * t)
+                                    * math.exp(-16 * t))
+            else:
+                for j in range(nd):
+                    out[s0 + j] += (0.06 * (rng.random() * 2 - 1)
+                                    * math.exp(-30 * (j / SAMPLE_RATE)))
+    return _normalize(out)
+def _make_music_ambient():
+    # медленный космический эмбиент: мягкие пады с расстройкой и колокольчики
+    beat = 1.2
+    nbeat = int(SAMPLE_RATE * beat)
+    bars = 4
+    total = nbeat * 4 * bars
+    out = [0.0] * total
+    chords = ((220.0, 277.18, 329.63), (174.61, 220.0, 261.63),
+              (196.0, 246.94, 293.66), (164.81, 207.65, 246.94))
+    bell = (880.0, 1108.73, 1318.51, 987.77, 739.99, 659.25)
+    nbar = int(SAMPLE_RATE * beat * 4)
+    for b in range(bars):
+        start = b * nbar
+        for j in range(nbar):
+            t = j / SAMPLE_RATE
+            pad = 0.0
+            for f in chords[b]:
+                pad += (math.sin(2 * math.pi * f * t)
+                        + 0.6 * math.sin(2 * math.pi * f * 1.003 * t))
+            out[start + j] += pad * 0.045 * _env(j, nbar, 0.35, 0.45)
+        for k in range(3):
+            f = bell[(b * 3 + k) % len(bell)]
+            s0 = start + int((k * 1.3 + 0.2) * nbeat)
+            nd = int(nbeat * 2.2)
+            if s0 + nd > total:
+                continue
+            for j in range(nd):
+                t = j / SAMPLE_RATE
+                out[s0 + j] += (0.06 * math.sin(2 * math.pi * f * t)
+                                * math.exp(-2.2 * t) * _env(j, nd, 0.002, 0.8))
+    return _normalize(out)
+def _make_music_funk():
+    # фанковый грув: синкопированный пила-бас, аккордовые уколы, сухие барабаны
+    import random as _rnd
+    rng = _rnd.Random(1971)
+    beat = 0.46
+    nbeat = int(SAMPLE_RATE * beat)
+    bars = 8
+    total = nbeat * 4 * bars
+    out = [0.0] * total
+    roots = (110.0, 110.0, 146.83, 98.0)
+    stab = ((220.0, 277.18, 329.63), (233.08, 293.66, 349.23))
+    bass_pat = (0, 0, 12, 0, 10, 0, 7, 12)
+    for b in range(bars):
+        root = roots[b % 4]
+        base = b * nbeat * 4
+        for k in range(16):
+            if k % 4 == 2 and (k // 4) % 2 == 1:
+                continue  # пропуски долей — грув
+            semis = bass_pat[k % 8] if k % 2 == 0 else 0
+            f = root * (2 ** (semis / 12))
+            s0 = base + k * nbeat // 4
+            nd = int(nbeat * 0.3)
+            if s0 + nd > total:
+                continue
+            ph = 0.0
+            for j in range(nd):
+                ph += f / SAMPLE_RATE
+                t = j / SAMPLE_RATE
+                v = _osc_saw(ph) * 0.7 + math.sin(2 * math.pi * f * t) * 0.3
+                out[s0 + j] += (0.15 * v * math.exp(-8 * t)
+                                * _env(j, nd, 0.003, 0.05))
+        for k in range(2):
+            ch = stab[(b + k) % 2]
+            s0 = base + int((0.5 + k * 2) * nbeat)
+            nd = int(nbeat * 0.35)
+            for j in range(nd):
+                t = j / SAMPLE_RATE
+                v = sum(math.sin(2 * math.pi * f * t) for f in ch) / 3
+                out[s0 + j] += 0.085 * v * math.exp(-9 * t) * _env(j, nd, 0.003, 0.08)
+        for k in range(8):
+            s0 = base + k * nbeat // 2
+            nd = int(nbeat * 0.3)
+            if k % 4 == 0:
+                for j in range(nd):
+                    t = j / SAMPLE_RATE
+                    f = 130 * math.exp(-18 * t) + 42
+                    out[s0 + j] += (0.28 * math.sin(2 * math.pi * f * t)
+                                    * math.exp(-14 * t))
+            elif k % 2 == 1:
+                for j in range(nd):
+                    out[s0 + j] += (0.09 * (rng.random() * 2 - 1)
+                                    * math.exp(-25 * (j / SAMPLE_RATE)))
+    return _normalize(out)
+def _make_music_arcade():
+    # бодрая аркада: ведущая мелодия восьмыми, пила-бас, энергичная бочка
+    import random as _rnd
+    rng = _rnd.Random(1985)
+    beat = 0.4
+    nbeat = int(SAMPLE_RATE * beat)
+    bars = 8
+    total = nbeat * 4 * bars
+    out = [0.0] * total
+    roots = (220.0, 164.81, 196.0, 174.61)
+    lead = (440.0, 523.25, 587.33, 659.25, 587.33, 523.25, 440.0, 392.0,
+            349.23, 440.0, 523.25, 440.0, 659.25, 587.33, 523.25, 440.0)
+    for b in range(bars):
+        root = roots[b % 4]
+        base = b * nbeat * 4
+        for k in range(4):
+            f = root / 2
+            s0 = base + k * nbeat
+            nd = int(nbeat * 0.55)
+            ph = 0.0
+            for j in range(nd):
+                ph += f / SAMPLE_RATE
+                t = j / SAMPLE_RATE
+                out[s0 + j] += (0.12 * _osc_saw(ph) * math.exp(-5 * t)
+                                * _env(j, nd, 0.004, 0.08))
+        for k in range(8):
+            f = lead[(b * 8 + k) % len(lead)]
+            s0 = base + k * nbeat // 2
+            nd = int(nbeat * 0.45)
+            ph = 0.0
+            for j in range(nd):
+                ph += f / SAMPLE_RATE
+                t = j / SAMPLE_RATE
+                v = math.sin(2 * math.pi * f * t) * 0.5 + _osc_square(ph) * 0.25
+                out[s0 + j] += (0.095 * v * math.exp(-4 * t)
+                                * _env(j, nd, 0.006, 0.1))
+        for k in range(4):
+            s0 = base + k * nbeat
+            nd = int(nbeat * 0.35)
+            if k % 2 == 0:
+                for j in range(nd):
+                    t = j / SAMPLE_RATE
+                    f = 140 * math.exp(-19 * t) + 44
+                    out[s0 + j] += (0.26 * math.sin(2 * math.pi * f * t)
+                                    * math.exp(-15 * t))
+            else:
+                for j in range(nd):
+                    out[s0 + j] += (0.07 * (rng.random() * 2 - 1)
+                                    * math.exp(-28 * (j / SAMPLE_RATE)))
+    return _normalize(out)
 def _wav_write(path, samples):
     frames = b"".join(
         struct.pack("<h", max(-32768, min(32767, int(s * 32767))))
@@ -283,7 +484,11 @@ def _music_needs_build():
         return True
     return any(not _music_file(tr).exists() for tr in MUSIC_IDS)
 def _build_music():
-    for tr, maker in (("classic", _make_music), ("retro", _make_music_retro)):
+    for tr, maker in (("classic", _make_music), ("retro", _make_music_retro),
+                      ("chiptune", _make_music_chiptune),
+                      ("ambient", _make_music_ambient),
+                      ("funk", _make_music_funk),
+                      ("arcade", _make_music_arcade)):
         p = _music_file(tr)
         if not p.exists():
             _wav_write(p, maker())
@@ -311,17 +516,63 @@ def ensure_assets():
         pass
     if _music_needs_build():
         threading.Thread(target=_safe_build_music, daemon=True).start()
+def _vol_step(save, key, default):
+    # шаг громкости 0..10 (0 = тишина: беззвучный режим или громкость 0)
+    if save.get("mute", False):
+        return 0
+    try:
+        v = int(save.get(key, default))
+    except (TypeError, ValueError):
+        v = default
+    v = max(0, min(100, v))
+    if v <= 0:
+        return 0
+    # любое nonzero значение остаётся слышимым (шаг 1..10)
+    return max(1, (v + 5) // VOL_STEPS)
+def _scaled_copy(src, dst, step):
+    """Копия wav с громкостью step/10 (кэшируется на диске)."""
+    if dst.exists():
+        return True
+    tmp = dst.with_name(dst.stem + ".tmp")
+    try:
+        with wave.open(str(src), "rb") as f:
+            params = f.getparams()
+            frames = f.readframes(f.getnframes())
+        k = step / float(VOL_STEPS)
+        samples = array.array("h")
+        samples.frombytes(frames)
+        for i in range(len(samples)):
+            s = int(samples[i] * k)
+            if s > 32767:
+                s = 32767
+            elif s < -32768:
+                s = -32768
+            samples[i] = s
+        with wave.open(str(tmp), "wb") as f:
+            f.setparams(params)
+            f.writeframes(samples.tobytes())
+        tmp.replace(dst)
+        return True
+    except Exception:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return False
 class SoundManager:
     def __init__(self, save=None):
         self.save = save if save is not None else {}
         self._proc = deque()
         self._music_proc = None
-        self._music_path = None
         self._music_thread = None
         self._music_watchdog = None
+        self._music_waiter = None
         self._music_on = False
-        self._winmm = None
+        self._music_want = False
+        self._music_step_cur = VOL_STEPS
+        self._building = set()
         self._winsound = None
+        self._winmm = None
         self._backend = None
         if sys.platform == "win32":
             try:
@@ -336,12 +587,38 @@ class SoundManager:
                 self._backend = cand
                 break
 
+    # ---------- громкость ----------
+    def _sfx_step(self):
+        if not self.save.get("sound", True):
+            return 0
+        return _vol_step(self.save, "sound_volume", 80)
+
+    def _music_step(self):
+        if not self.save.get("music", True):
+            return 0
+        return _vol_step(self.save, "music_volume", 70)
+
+    def _variant(self, path, step):
+        # путь к wav с громкостью step/10; при отсутствии создаётся на месте
+        if step >= VOL_STEPS:
+            return path
+        dst = path.with_name(f"{path.stem}_v{step}.wav")
+        if dst.exists():
+            return dst
+        return path if _scaled_copy(path, dst, step) else None
+
+    # ---------- звуки ----------
     def play(self, name):
-        if not self.save.get("sound", True) or not self._backend:
+        step = self._sfx_step()
+        if step <= 0 or not self._backend:
             return
         path = SOUNDS_DIR / f"{name}.wav"
         if not path.exists():
             return
+        if step < VOL_STEPS:
+            path = self._variant(path, step)
+            if path is None:
+                return
         try:
             if self._backend == "winsound":
                 w = self._winsound
@@ -367,6 +644,7 @@ class SoundManager:
             except Exception:
                 pass
 
+    # ---------- музыка (Windows: MCI, цикл через watchdog) ----------
     def _mci(self, cmd):
         try:
             import ctypes
@@ -379,25 +657,34 @@ class SoundManager:
             return 1, ""
 
     def _mci_start(self, path):
+        # ВАЖНО: у waveaudio НЕТ флага "repeat" — команда с ним падает и
+        # музыка вообще не включалась. Цикл обеспечивает _mci_watchdog.
         self._mci('close snakeymusic')
         code, _ = self._mci(f'open "{path}" type waveaudio alias snakeymusic')
         if code != 0:
             return False
-        self._mci("play snakeymusic from 0 repeat")
+        self._mci("play snakeymusic from 0")
         code, mode = self._mci("status snakeymusic mode")
         return code == 0 and mode == "playing"
 
     def _mci_watchdog(self):
+        # держит трек цикличным: как только mode == "stopped" — играем сначала
         while self._music_on:
-            time.sleep(5.0)
+            time.sleep(0.25)
             if not self._music_on:
                 break
             code, mode = self._mci("status snakeymusic mode")
-            if code != 0 or mode not in ("playing", "paused"):
-                path = self._music_path
+            path = self._music_path
+            if code != 0:
+                if path is not None and Path(path).exists():
+                    self._mci_start(path)
+            elif mode == "stopped":
+                self._mci("play snakeymusic from 0")
+            elif mode not in ("playing", "paused"):
                 if path is not None and Path(path).exists():
                     self._mci_start(path)
 
+    # ---------- музыка (Linux/macOS: внешний плеер по кругу) ----------
     def _music_loop(self, path):
         while self._music_on:
             try:
@@ -415,26 +702,58 @@ class SoundManager:
                 except Exception:
                     pass
 
-    def _resolve_music_path(self):
+    # ---------- управление музыкой ----------
+    def _music_play_path(self, step):
         track = self.save.get("music_track", "classic")
         for cand in (track, "classic"):
-            p = _music_file(cand)
-            if p.exists():
-                return p
-        legacy = SOUNDS_DIR / "bg_music.wav"
-        return legacy if legacy.exists() else None
+            base = _music_file(cand)
+            if not base.exists():
+                continue
+            if step >= VOL_STEPS:
+                return base
+            dst = base.with_name(f"music_{cand}_v{step}.wav")
+            if dst.exists():
+                return dst
+            if cand not in self._building:
+                self._building.add(cand)
+                threading.Thread(target=self._build_variant_worker,
+                                 args=(base, dst, step, cand),
+                                 daemon=True).start()
+            return None
+        return None
 
-    def start_music(self):
-        if self._music_on or not self.save.get("music", True):
-            return
-        path = self._resolve_music_path()
-        if path is None:
-            return
+    def _build_variant_worker(self, base, dst, step, cand):
+        try:
+            _scaled_copy(base, dst, step)
+        finally:
+            self._building.discard(cand)
+
+    def _music_wait_loop(self):
+        # музыкальные wav генерируются в фоне при первом запуске —
+        # ждём их появления и стартуем автоматически (раньше музыка
+        # просто не включалась, если файл ещё не был готов)
+        for _ in range(600):
+            if not self._music_want:
+                self._music_waiter = None
+                return
+            step = self._music_step()
+            if step <= 0:
+                self._music_waiter = None
+                return
+            path = self._music_play_path(step)
+            if path is not None:
+                self._music_waiter = None
+                self._begin_music(path, step)
+                return
+            time.sleep(0.5)
+        self._music_waiter = None
+
+    def _begin_music(self, path, step):
         self._music_path = str(path)
+        self._music_step_cur = step
         self._music_on = True
-        if sys.platform == "win32":
-            ok = self._mci_start(str(path))
-            if ok:
+        if self._backend == "winsound":
+            if self._mci_start(str(path)):
                 self._music_watchdog = threading.Thread(
                     target=self._mci_watchdog, daemon=True)
                 self._music_watchdog.start()
@@ -447,9 +766,27 @@ class SoundManager:
         else:
             self._music_on = False
 
-    def stop_music(self):
+    def start_music(self):
+        self._music_want = True
+        if self._music_on:
+            return
+        if not self.save.get("music", True) or self.save.get("mute", False):
+            return
+        step = self._music_step()
+        if step <= 0:
+            return
+        path = self._music_play_path(step)
+        if path is None:
+            if self._music_waiter is None:
+                self._music_waiter = threading.Thread(
+                    target=self._music_wait_loop, daemon=True)
+                self._music_waiter.start()
+            return
+        self._begin_music(path, step)
+
+    def _halt_playback(self):
+        # остановить воспроизведение, но сохранить желание слушать музыку
         self._music_on = False
-        self._music_path = None
         if self._winmm is not None:
             try:
                 self._winmm.mciSendStringW("stop snakeymusic", None, 0, 0)
@@ -465,17 +802,41 @@ class SoundManager:
             except Exception:
                 pass
 
+    def stop_music(self):
+        self._music_want = False
+        self._halt_playback()
+        self._music_path = None
+
     def set_music(self, on):
         if on:
-            self._music_on = False
             self.start_music()
         else:
             self.stop_music()
 
+    def set_mute(self, on):
+        if on:
+            self.stop_music()
+        else:
+            self.start_music()
+
     def restart_music(self):
         self.stop_music()
-        time.sleep(0.05)
         self.start_music()
+
+    def apply_music_volume(self):
+        # применяется без лишних перезапусков: смена шага громкости
+        # требует другой wav-вариант
+        if not self._music_want:
+            return
+        step = self._music_step()
+        if step <= 0:
+            self._halt_playback()
+            return
+        if self._music_on and step == self._music_step_cur:
+            return
+        self._halt_playback()
+        self.start_music()
+
 SOUND = None
 def sfx(name):
     if SOUND is not None:

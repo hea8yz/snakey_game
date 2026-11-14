@@ -310,8 +310,8 @@ class GameScreen(MinigameMixin, Screen):
         if not free:
             return None
         pos = random.choice(free)
-        base = FOOD_BY_ID[kind]["size"] if kind in FOOD_BY_ID else 0.9
-        self.foods.append((kind, pos, base + random.uniform(-0.12, 0.12)))
+        # вся еда — стандартного размера яблока (видна и на слабых ПК)
+        self.foods.append((kind, pos, 1.0))
         self._food_born[pos] = self.tick_count
         self._foods_dirty = True
         return pos
