@@ -36,9 +36,7 @@ for _m in (_content, _save, _utils, _drawing, _assets, _widgets, _shop,
 
 # ---------------- Автообновление ----------------
 import os as _os
-import subprocess as _subprocess
 import sys as _sys
-import tempfile as _tempfile
 import threading as _threading
 import urllib.request as _urllib_request
 
@@ -74,53 +72,13 @@ def _fetch_text(url, timeout=3):
         return resp.read().decode("utf-8", "replace")
 
 
-def _download_files(progress=None):
-    """Скачивает файлы из MANIFEST.txt (ветка main) и атомарно заменяет их.
-    Возвращает число успешно обновлённых файлов."""
-    base = _os.path.dirname(_os.path.abspath(__file__))
-    try:
-        manifest = _fetch_text(REPO_RAW + "MANIFEST.txt", timeout=5)
-        files = [ln.strip() for ln in manifest.splitlines()
-                 if ln.strip() and not ln.strip().startswith("#")]
-    except Exception:
-        files = []
-    if not files:
-        files = (["VERSION", "MANIFEST.txt", "README.md"]
-                 + [n for n in _os.listdir(base)
-                    if n.startswith("snakey_") and n.endswith(".py")])
-    done = 0
-    for name in files:
-        if "/" in name or chr(92) in name or name.startswith("."):
-            continue
-        tmp = None
-        try:
-            data = _fetch_text(REPO_RAW + name, timeout=10)
-            fd, tmp = _tempfile.mkstemp(dir=base, prefix=".up_",
-                                        suffix=".tmp")
-            with _os.fdopen(fd, "wb") as f:
-                f.write(data.encode("utf-8"))
-            _os.replace(tmp, _os.path.join(base, name))
-            tmp = None
-            done += 1
-            if progress is not None:
-                try:
-                    progress(name, done, len(files))
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        if tmp is not None:
-            try:
-                _os.unlink(tmp)
-            except OSError:
-                pass
-    return done
-
-
 def _show_update_prompt(app, new_version):
-    """Всплывающее окно «пора обновиться» с кнопками «Позже» и «Обновить»."""
+    """Всплывающее окно «пора обновиться» с кнопками «Позже» и «Обновить».
+
+    «Обновить» просто закрывает игру — файлы сами по себе не меняются.
+    Обновляет папку игры отдельный скрипт update.bat (скачивает из репозитория
+    только изменённые файлы и добавляет новые)."""
     try:
-        frozen = getattr(_sys, "frozen", False)
         win = tk.Toplevel(app)
         win.title("SNAKEY — обновление")
         win.configure(bg="#101820")
@@ -136,7 +94,12 @@ def _show_update_prompt(app, new_version):
         tk.Label(win, text="У тебя версия " + _local_version()
                            + " — пора обновить игру!",
                  bg="#101820", fg="#cdd9e5",
-                 font=(fam, 10)).pack(padx=30, pady=(0, 14))
+                 font=(fam, 10)).pack(padx=30, pady=(0, 10))
+        tk.Label(win, text="«Обновить» закроет игру — файлы сами не изменятся.\n"
+                           "Затем запусти update.bat из папки игры: он скачает\n"
+                           "новые файлы из репозитория и добавит их в папку.",
+                 bg="#101820", fg="#8b949e", justify="center",
+                 font=(fam, 9)).pack(padx=30, pady=(0, 14))
         btns = tk.Frame(win, bg="#101820")
         btns.pack(pady=(0, 18))
 
@@ -145,18 +108,12 @@ def _show_update_prompt(app, new_version):
             refocus_app(app)
 
         def do_update():
-            if frozen:
-                # код exe нельзя заменить файлами — открываем репозиторий,
-                # где лежит новая версия (или запускается build.bat)
-                try:
-                    import webbrowser
-                    webbrowser.open("https://github.com/hea8yz/snakey_game")
-                except Exception:
-                    pass
-                later()
-                return
-            win.destroy()
-            _update_and_restart(app, new_version)
+            # игра просто закрывается; обновление файлов делает update.bat
+            try:
+                app.sound.stop_music()
+            except Exception:
+                pass
+            app.destroy()
 
         tk.Button(btns, text="Позже", command=later,
                   bg="#30363d", fg="#cdd9e5", activebackground="#3d444d",
@@ -171,7 +128,7 @@ def _show_update_prompt(app, new_version):
 
         # центрируем поверх основного окна (как все попапы игры)
         win.update_idletasks()
-        w = max(win.winfo_reqwidth(), 340)
+        w = max(win.winfo_reqwidth(), 380)
         h = win.winfo_reqheight()
         try:
             px, py = app.winfo_rootx(), app.winfo_rooty()
@@ -189,82 +146,6 @@ def _show_update_prompt(app, new_version):
         win.focus_force()
     except Exception:
         pass
-
-
-def _restart_game():
-    """Запускает игру заново (после обновления) и завершает текущий процесс."""
-    try:
-        if getattr(_sys, "frozen", False):
-            _subprocess.Popen([_sys.executable], close_fds=True)
-        else:
-            _subprocess.Popen([_sys.executable, _os.path.abspath(__file__)],
-                              close_fds=True)
-    except Exception:
-        pass
-    try:
-        _sys.exit(0)
-    except Exception:
-        _os._exit(0)
-
-
-def _update_and_restart(app, new_version):
-    """Закрывает игру, скачивает файлы из репозитория и запускает игру заново."""
-    try:
-        app.destroy()
-    except Exception:
-        pass
-    root = None
-    lbl = None
-    try:
-        root = tk.Tk()
-        root.title("SNAKEY — обновление")
-        root.configure(bg="#101820")
-        root.resizable(False, False)
-        try:
-            root.attributes("-topmost", True)
-        except Exception:
-            pass
-        lbl = tk.Label(root, text="⬇  Обновляю игру до версии "
-                                  + new_version + "...",
-                       bg="#101820", fg="#3fff9e",
-                       font=("Helvetica", 12, "bold"))
-        lbl.pack(padx=44, pady=34)
-        root.update_idletasks()
-        w, h = root.winfo_reqwidth(), root.winfo_reqheight()
-        root.geometry(f"{w}x{h}+{max(0, (root.winfo_screenwidth() - w) // 2)}"
-                      f"+{max(0, (root.winfo_screenheight() - h) // 2)}")
-        root.update()
-    except Exception:
-        pass
-
-    def note(msg, col="#3fff9e"):
-        if lbl is not None:
-            try:
-                lbl.config(text=msg, fg=col)
-                if root is not None:
-                    root.update()
-            except Exception:
-                pass
-
-    try:
-        done = _download_files()
-    except Exception:
-        done = 0
-    if done:
-        note("✓  Готово! Запускаю обновлённую игру...")
-    else:
-        note("⚠  Не удалось скачать обновление (нет интернета?).\n"
-             "Открываю игру в текущей версии.", "#ffd75c")
-
-    # короткая пауза, чтобы текст было видно, затем перезапуск
-    try:
-        if root is not None:
-            root.after(1600 if done else 2600, _restart_game)
-            root.mainloop()
-            return
-    except Exception:
-        pass
-    _restart_game()
 
 
 def start_autoupdate(app):
