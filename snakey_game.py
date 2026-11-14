@@ -72,6 +72,11 @@ class GameScreen(MinigameMixin, Screen):
                                 highlightthickness=0)
         self.slider.pack()
 
+        # стройка (mg8): биндинг клика ОДИН раз на жизнь канваса. Раньше биндинг
+        # добавлялся в _mg8_setup при каждом new_game, и после нескольких
+        # рестартов один клик ставил несколько блоков и списывал очки многократно
+        self.canvas.bind("<Button-1>", self._mg8_canvas_click, add="+")
+
         tk.Label(self, text="Стрелки / WASD — движение    P — пауза    R — заново"
                  "    C — воскреситься    B — стройка    Esc — меню",
                  bg=BG, fg=DIM, font=(app.font_ui, 9)).pack(pady=(2, 8))
@@ -127,6 +132,12 @@ class GameScreen(MinigameMixin, Screen):
         self._seg_fills = []
         self._fx_items = []
         self.paused = False
+        # пулы головы змейки и индикаторов мини-игр (см. _draw/_mg_indicator)
+        self._head_items = []
+        self._tongue_shown = False
+        self._ring_col = None
+        self._mgind_items = []
+        self._dark_dirty = True
 
     def on_show(self):
         self._cancel()
@@ -312,7 +323,7 @@ class GameScreen(MinigameMixin, Screen):
             self.obstacles.update(cells)
 
     def _spawn_food(self, kind):
-        occupied = set(self.snake) | self.obstacles | {pos for f in self.foods for pos in (f[1],)}
+        occupied = set(self.snake) | self.obstacles | {f[1] for f in self.foods}
         free = [(r, c) for r in range(ROWS) for c in range(COLS)
                 if (r, c) not in occupied]
         if not free:
@@ -334,7 +345,7 @@ class GameScreen(MinigameMixin, Screen):
         self._spawn_food(pick["id"])
 
     def _spawn_mg3_apple(self):
-        occupied = set(self.snake) | {pos for f in self.foods for pos in (f[1],)}
+        occupied = set(self.snake) | {f[1] for f in self.foods}
         free = [(r, c) for r in range(ROWS // 2) for c in range(COLS)
                 if (r, c) not in occupied]
         if free:
@@ -681,7 +692,7 @@ class GameScreen(MinigameMixin, Screen):
             return
         self.app.save["coins"] -= cost
         self.app.commit()
-        self.coins_var.set(f"◉  {self.app.save['coins']}")
+        self.coins_var.set(f"◎  {self.app.save['coins']}")
         sfx("coin")
         self.revive_used = True
         st = self.app.save.get("stats")
@@ -1045,6 +1056,11 @@ class GameScreen(MinigameMixin, Screen):
         self._tunnel_items = []
         self._dark_items = []
         self._mg8_wall_dirty = True
+        self._head_items = []
+        self._tongue_shown = False
+        self._ring_col = None
+        self._mgind_items = []
+        self._dark_dirty = True
 
     def _draw_slider(self):
         c = self.slider
@@ -1122,7 +1138,7 @@ class GameScreen(MinigameMixin, Screen):
 
     def _draw(self):
         c = self.canvas
-        c.delete("head", "fx", "overlay", "mgfx")
+        c.delete("headacc", "fx", "overlay", "mgfx")
         if self.mg == "mg6":
             self._mg6_draw()
         phase = self.tick_count * 0.35
@@ -1131,6 +1147,7 @@ class GameScreen(MinigameMixin, Screen):
                 c.delete("food")
                 self._draw_foods(0.0, True)
                 self._foods_dirty = False
+                self._dark_dirty = True
         else:
             # перерисовываем еду только когда она изменилась или играет
             # анимация появления — иначе оставляем как есть (перф)
@@ -1141,6 +1158,7 @@ class GameScreen(MinigameMixin, Screen):
                 c.delete("food")
                 self._draw_foods(phase, False)
                 self._foods_dirty = False
+                self._dark_dirty = True
 
         sel = self.app.save.get("selected", ACCENT)
         need = len(self.snake)
@@ -1160,6 +1178,7 @@ class GameScreen(MinigameMixin, Screen):
             self._seg_cells.append(None)
             self._seg_scells.append(None)
             self._seg_fills.append(None)
+            self._dark_dirty = True
         shown = self._seg_shown
         shshown = self._seg_shshown
         cells = self._seg_cells
@@ -1203,24 +1222,45 @@ class GameScreen(MinigameMixin, Screen):
         ring = (blend(GRADIENTS[sel][1], "#ffffff", 0.3) if sel in GRADIENTS
                 else hsv_hex((self.tick_count * 8) / 360, 0.85, 0.95)
                 if sel == "rainbow" else blend(sel, "#ffffff", 0.5))
-        c.create_oval(hc * CELL, hr * CELL, (hc + 1) * CELL, (hr + 1) * CELL,
-                      outline=ring, width=2, tags="head")
+        # голова — пул из 4 items (кольцо, 2 глаза, язычок): вместо create+delete
+        # каждый тик только coords/itemconfig — меньше работы canvas на длинной
+        # змейке и высоких скоростях
+        hi = self._head_items
+        if not hi:
+            hi = self._head_items = [
+                c.create_oval(-40, -40, -39, -39, outline=ring, width=2,
+                              tags="headp", state="hidden"),
+                c.create_oval(-40, -40, -39, -39, fill="#06220c", outline="",
+                              tags="headp", state="hidden"),
+                c.create_oval(-40, -40, -39, -39, fill="#06220c", outline="",
+                              tags="headp", state="hidden"),
+                c.create_line(-40, -40, -39, -39, fill=RED, width=2,
+                              tags="headp", state="hidden"),
+            ]
+            self._tongue_shown = False
+        if ring != self._ring_col:
+            c.itemconfig(hi[0], outline=ring)
+            self._ring_col = ring
+        c.coords(hi[0], hc * CELL, hr * CELL, (hc + 1) * CELL, (hr + 1) * CELL)
+        c.itemconfig(hi[0], state="normal")
         dx, dy = self.direction[1], self.direction[0]
-        if not self.game_over and self.tick_count % 9 < 3:
-            c.create_line(cx + dx * 9, cy + dy * 9, cx + dx * 14, cy + dy * 14,
-                          fill=RED, width=2, tags="head")
         px, py = -dy, dx
-        for sign in (1, -1):
+        show_tongue = not self.game_over and self.tick_count % 9 < 3
+        if show_tongue:
+            c.coords(hi[3], cx + dx * 9, cy + dy * 9, cx + dx * 14, cy + dy * 14)
+        if show_tongue != self._tongue_shown:
+            c.itemconfig(hi[3], state="normal" if show_tongue else "hidden")
+            self._tongue_shown = show_tongue
+        for k, sign in ((1, 1), (2, -1)):
             ex = cx + dx * 5 + px * 5 * sign
             ey = cy + dy * 5 + py * 5 * sign
-            c.create_oval(ex - 2.5, ey - 2.5, ex + 2.5, ey + 2.5,
-                          fill="#06220c", outline="", tags="head")
+            c.coords(hi[k], ex - 2.5, ey - 2.5, ex + 2.5, ey + 2.5)
         acc = self.app.save.get("accessory", "none")
         if acc != "none":
-            draw_acc(c, cx, cy, acc, self.tick_count * 0.35, tags="head")
+            draw_acc(c, cx, cy, acc, self.tick_count * 0.35, tags="headacc")
         if self.mg == "mg3" and self.carrying and not self.game_over:
             draw_food(c, cx, cy - 16, self.carrying, self.tick_count * 0.35,
-                      simple=self.low, tags="head")
+                      simple=self.low, tags="headacc")
         if self.mg == "mg7":
             # тьма рисуется ПОСЛЕ еды и змейки: вне фонарика ничего не видно
             self._mg7_darkness()
