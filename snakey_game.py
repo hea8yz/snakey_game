@@ -491,6 +491,14 @@ class GameScreen(MinigameMixin, Screen):
             self.direction = self.next_direction
             self._mg6_tick()
             return
+        if self.mg == "mg8" and self.mg8_build:
+            # режим стройки: змейка замирает (стрелки/клик ставят блоки),
+            # ИИ-змейка продолжает двигаться — это цена стройки
+            if not self._mg_after_tick():
+                return
+            self._draw()
+            self._schedule()
+            return
         self.direction = self.next_direction
         dr, dc = self.direction
         head_r, head_c = self.snake[0]

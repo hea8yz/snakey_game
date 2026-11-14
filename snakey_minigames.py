@@ -428,6 +428,11 @@ class MinigameMixin:
         cell = (hr + dr, hc + dc)
         if not (0 <= cell[0] < ROWS and 0 <= cell[1] < COLS):
             return
+        if cell == (hr + self.direction[0], hc + self.direction[1]):
+            # нельзя прямо перед головой: выйдешь из стройки — врежешься
+            self.popups.append([hc * CELL + CELL / 2, hr * CELL - 6,
+                                "Не перед головой!", 9, WARN])
+            return
         busy = (set(self.snake) | set(self.ai_snake) | self.mg8_walls
                 | {f[1] for f in self.foods})
         if cell in busy:
@@ -457,7 +462,7 @@ class MinigameMixin:
         if self.mg8_build:
             c = self.canvas
             c.create_text(COLS * CELL / 2, ROWS * CELL - 14,
-                          text="🧱 СТРОЙКА: стрелки — поставить блок · B — выход",
+                          text="🧱 СТРОЙКА (змейка ждёт): стрелки или клик — блок · B — выход",
                           font=(self.app.font_ui, 10, "bold"), fill="#ffb74d",
                           tags="mgfx")
 
