@@ -1,3 +1,5 @@
+import math
+import time
 import tkinter as tk
 
 
@@ -5,11 +7,13 @@ from snakey_content import (
 
 
     ACCENT,
+    ACCENT_BRIGHT,
     ACCENT_DARK,
     BG,
     BLUE,
     BORDER,
     DIFFICULTIES,
+    DIFF_SLIDER,
     DIM,
     GRADIENTS,
     LOCKED_BG,
@@ -28,7 +32,19 @@ from snakey_content import (
 from snakey_drawing import draw_acc
 from snakey_save import level_from_exp
 from snakey_utils import blend, gradient_bands, hsv_hex, round_rect, seg_color
-from snakey_widgets import GradientBG, RoundButton, Screen
+from snakey_widgets import (GradientBG, GradientButton, RoundButton, Screen,
+                            gradient_round_btn)
+
+TRACK_ICON_COLORS = {
+    "classic": "#3fb950",
+    "retro": "#ffe14d",
+    "chiptune": "#3b82f6",
+    "ambient": "#2dd4bf",
+    "funk": "#ff9f1c",
+    "arcade": "#ff5c5c",
+}
+NOTE = "\u266a"
+
 
 class VolumeSlider(tk.Canvas):
     """Компактный слайдер громкости в стиле игры (0..100)."""
@@ -124,14 +140,6 @@ class SettingsScreen(Screen):
             self.inner, "", self._toggle_low, width=380, height=42,
             app_bg=self.mid, font=(app.font_ui, 10, "bold"))
         self.low_btn.pack(pady=(2, 4))
-        self.sound_btn = RoundButton(
-            self.inner, "", self._toggle_sound, width=380, height=42,
-            app_bg=self.mid, font=(app.font_ui, 10, "bold"))
-        self.sound_btn.pack(pady=(2, 4))
-        self.music_btn = RoundButton(
-            self.inner, "", self._toggle_music, width=380, height=42,
-            app_bg=self.mid, font=(app.font_ui, 10, "bold"))
-        self.music_btn.pack(pady=(2, 4))
         self.au_btn = RoundButton(
             self.inner, "", self._toggle_au, width=380, height=42,
             app_bg=self.mid, font=(app.font_ui, 10, "bold"))
@@ -140,6 +148,17 @@ class SettingsScreen(Screen):
         self._section("Громкость")
         self._music_vol_job = None
         self._sound_vol_job = None
+        self._icon_job = None
+        self._icon_pos = {}
+        self._icon_oval = None
+        self.sound_btn = RoundButton(
+            self.inner, "", self._toggle_sound, width=380, height=42,
+            app_bg=self.mid, font=(app.font_ui, 10, "bold"))
+        self.sound_btn.pack(pady=(2, 4))
+        self.music_btn = RoundButton(
+            self.inner, "", self._toggle_music, width=380, height=42,
+            app_bg=self.mid, font=(app.font_ui, 10, "bold"))
+        self.music_btn.pack(pady=(2, 4))
         mrow = tk.Frame(self.inner, bg=self.mid)
         mrow.pack(pady=(2, 0))
         tk.Label(mrow, text="Музыка", bg=self.mid, fg=TEXT,
@@ -166,10 +185,15 @@ class SettingsScreen(Screen):
             self.track_frame, "◀", self._track_prev, width=56, height=42,
             app_bg=self.mid, font=(self.app.font_ui, 12, "bold"))
         self.track_prev_btn.pack(side="left", padx=(0, 6))
-        self.track_btn = RoundButton(
+        self.track_btn = GradientButton(
             self.track_frame, "", self._track_next, width=280, height=42,
-            app_bg=self.mid, font=(self.app.font_ui, 10, "bold"))
+            radius=14, c1="#2ea043", c2="#155d24", fg="#eafff0",
+            app_bg=self.mid, font=(self.app.font_ui, 10, "bold"),
+            hover_scale=0.035)
         self.track_btn.pack(side="left")
+        self.track_icons = tk.Canvas(self.track_frame, width=170, height=42,
+                                     bg=self.mid, highlightthickness=0)
+        self.track_icons.pack(side="left", padx=(6, 0))
         self.track_next_btn = RoundButton(
             self.track_frame, "▶", self._track_next, width=56, height=42,
             app_bg=self.mid, font=(self.app.font_ui, 12, "bold"))
@@ -190,20 +214,37 @@ class SettingsScreen(Screen):
         self._rebuild()
         self.bg.set_animated(not self.app.save.get("low_spec"))
         self.scroller.yview_moveto(0)
+        self._start_icon_anim()
 
     def on_hide(self):
         self.bg.set_animated(False)
+        self._stop_icon_anim()
+
+    def _start_icon_anim(self):
+        self._stop_icon_anim()
+        if not self.app.save.get("low_spec"):
+            self._icon_job = self.after(400, self._anim_player)
+
+    def _stop_icon_anim(self):
+        if self._icon_job is not None:
+            try:
+                self.after_cancel(self._icon_job)
+            except Exception:
+                pass
+            self._icon_job = None
 
     def _on_resize(self, event):
         self.scroller.itemconfig(self._win, width=max(400, event.width - 22))
 
     def _section(self, title):
-        cv = tk.Canvas(self.inner, width=340, height=30, bg=self.mid,
+        cv = tk.Canvas(self.inner, width=380, height=32, bg=self.mid,
                        highlightthickness=0)
-        cv.pack(pady=(10, 2))
-        round_rect(cv, 1, 1, 338, 29, 14, fill=PANEL, outline=BORDER)
-        cv.create_text(170, 15, text=title,
-                       font=(self.app.font_ui, 11, "bold"), fill=ACCENT)
+        cv.pack(pady=(12, 4))
+        gradient_round_btn(cv, 2, 2, 377, 29, 15, PANEL,
+                           blend(PANEL, ACCENT_DARK, 0.5))
+        cv.create_text(190, 16, text=title,
+                       font=(self.app.font_ui, 11, "bold"),
+                       fill=ACCENT_BRIGHT)
 
     def _paint_preview(self):
         """Экранчик предпросмотра: змейка выбранным цветом с аксессуаром
@@ -410,6 +451,48 @@ class SettingsScreen(Screen):
         for b in (self.track_prev_btn, self.track_next_btn):
             b.base_fg = TEXT if multi else DIM
             b.repaint()
+        self._paint_track_icons(owned, cur)
+
+    def _paint_track_icons(self, owned, cur):
+        """1.1: ряд небольших иконок — по одной на каждый трек; текущая
+        выделена кружком (пульсирует в _anim_player)."""
+        cv = self.track_icons
+        cv.delete("all")
+        self._icon_pos = {}
+        self._icon_oval = None
+        x = 14
+        for tr in owned:
+            tid = tr["id"]
+            col = TRACK_ICON_COLORS.get(tid, ACCENT)
+            if tid == cur:
+                self._icon_oval = cv.create_oval(
+                    x - 9, 12, x + 9, 30,
+                    fill=blend(col, "#ffffff", 0.3), outline=col, width=2)
+                cv.create_text(x, 21, text=NOTE,
+                               font=(self.app.font_ui, 10, "bold"),
+                               fill="#0b2413")
+            else:
+                cv.create_text(x, 21, text=NOTE,
+                               font=(self.app.font_ui, 10), fill=col)
+            self._icon_pos[tid] = x
+            x += 26
+
+    def _anim_player(self):
+        """Пульс иконки текущего трека (не работает при low_spec)."""
+        self._icon_job = None
+        if self.app.save.get("low_spec"):
+            return
+        cur = self.app.save.get("music_track", "classic")
+        x = getattr(self, "_icon_pos", {}).get(cur)
+        oval = getattr(self, "_icon_oval", None)
+        if x is None or oval is None:
+            return
+        r = 9 + math.sin(time.monotonic() * 3.0) * 1.6
+        try:
+            self.track_icons.coords(oval, x - r, 21 - r, x + r, 21 + r)
+        except Exception:
+            return
+        self._icon_job = self.after(120, self._anim_player)
 
     def _track_step(self, step):
         owned = self._owned_tracks()
@@ -458,20 +541,28 @@ class SettingsScreen(Screen):
                 w.destroy()
             for key, dcfg in DIFFICULTIES.items():
                 if dcfg["level"] > level:
-                    btn = RoundButton(self.diff_frame, f"🔒 ур. {dcfg['level']}",
-                                      width=126, height=42, bg=LOCKED_BG, fg=DIM,
-                                      app_bg=self.mid,
-                                      font=(self.app.font_ui, 10, "bold"))
+                    btn = RoundButton(self.diff_frame,
+                                      f"\U0001F512 \u0443\u0440. {dcfg['level']}",
+                                      width=150, height=54, bg=LOCKED_BG,
+                                      fg=DIM, app_bg=self.mid,
+                                      font=(self.app.font_ui, 11, "bold"))
                 else:
                     selected = key == current
-                    btn = RoundButton(
+                    col = DIFF_SLIDER[key][0]
+                    lit = "#ffffff" if selected else "#000000"
+                    amt = 0.22 if selected else 0.0
+                    btn = GradientButton(
                         self.diff_frame, dcfg["label"],
                         command=(lambda k=key: self._set_speed(k)),
-                        width=126, height=42,
-                        bg=ACCENT_DARK if selected else PANEL,
-                        fg="#c9ffd4" if selected else TEXT, app_bg=self.mid,
-                        font=(self.app.font_ui, 10, "bold"))
-                btn.pack(side="left", padx=4)
+                        width=150, height=54, radius=18,
+                        c1=blend(col, lit, amt),
+                        c2=blend(DIFF_SLIDER[key][1], lit, amt),
+                        fg="#0b2413" if key in ("normal", "medium")
+                        else "#fff3e0",
+                        app_bg=self.mid,
+                        font=(self.app.font_ui, 12, "bold"),
+                        sticker_key=key, sticker_color=col)
+                btn.pack(side="left", padx=5)
         cur_size = self.app.save.get("window_size", "medium")
         if cur_size not in WINDOW_SIZES:
             cur_size = "medium"
