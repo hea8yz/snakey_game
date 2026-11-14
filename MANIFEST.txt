@@ -13,5 +13,7 @@ snakey_settings.py
 snakey_shop.py
 snakey_utils.py
 snakey_widgets.py
+update.bat
+snakey_update.ps1
 README.md
 VERSION
