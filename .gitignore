@@ -1,2 +1,4 @@
 __pycache__/
 *.pyc
+assets/sounds/*_v*.wav
+assets/sounds/*.tmp

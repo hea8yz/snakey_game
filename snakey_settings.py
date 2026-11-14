@@ -30,6 +30,48 @@ from snakey_shop import ShopCard
 from snakey_utils import blend, hsv_hex, round_rect, seg_color
 from snakey_widgets import GradientBG, RoundButton, Screen
 
+class VolumeSlider(tk.Canvas):
+    """Компактный слайдер громкости в стиле игры (0..100)."""
+    def __init__(self, master, bg, on_change, width=200, height=30):
+        super().__init__(master, width=width, height=height, bg=bg,
+                         highlightthickness=0)
+        self.on_change = on_change
+        self._w = width
+        self._h = height
+        self.value = 100
+        self.bind("<Button-1>", self._on_drag)
+        self.bind("<B1-Motion>", self._on_drag)
+        self._draw()
+
+    def set_value(self, v):
+        self.value = max(0, min(100, int(v)))
+        self._draw()
+
+    def _on_drag(self, event):
+        pad = 8
+        usable = self._w - pad * 2 - 34  # справа место под подпись "N%"
+        frac = (event.x - pad) / max(1, usable)
+        v = int(round(max(0.0, min(1.0, frac)) * 100))
+        if v != self.value:
+            self.set_value(v)
+            self.on_change(v)
+
+    def _draw(self):
+        self.delete("all")
+        pad, h = 8, self._h
+        mid = h / 2
+        x2 = pad + (self._w - pad * 2 - 34) * self.value / 100.0
+        round_rect(self, pad, mid - 4, self._w - pad - 34, mid + 4, 4,
+                   fill=PANEL, outline=BORDER)
+        if self.value > 0:
+            round_rect(self, pad, mid - 4, max(pad + 8, x2), mid + 4, 4,
+                       fill=ACCENT, outline="")
+        self.create_oval(x2 - 7, mid - 7, x2 + 7, mid + 7,
+                         fill="#eafff0", outline=ACCENT)
+        self.create_text(self._w - pad, mid, anchor="e",
+                         text=f"{self.value}%", fill=TEXT,
+                         font=("Helvetica", 9, "bold"))
+
 class SettingsScreen(Screen):
     def __init__(self, master, app):
         super().__init__(master, app)
@@ -94,6 +136,28 @@ class SettingsScreen(Screen):
             self.inner, "", self._toggle_au, width=380, height=42,
             app_bg=self.mid, font=(app.font_ui, 10, "bold"))
         self.au_btn.pack(pady=(2, 4))
+
+        self._section("Громкость")
+        self._music_vol_job = None
+        self._sound_vol_job = None
+        mrow = tk.Frame(self.inner, bg=self.mid)
+        mrow.pack(pady=(2, 0))
+        tk.Label(mrow, text="Музыка", bg=self.mid, fg=TEXT,
+                 font=(app.font_ui, 10), width=9,
+                 anchor="w").pack(side="left")
+        self.music_vol = VolumeSlider(mrow, self.mid, self._on_music_vol)
+        self.music_vol.pack(side="left")
+        srow = tk.Frame(self.inner, bg=self.mid)
+        srow.pack(pady=(2, 2))
+        tk.Label(srow, text="Звуки", bg=self.mid, fg=TEXT,
+                 font=(app.font_ui, 10), width=9,
+                 anchor="w").pack(side="left")
+        self.sound_vol = VolumeSlider(srow, self.mid, self._on_sound_vol)
+        self.sound_vol.pack(side="left")
+        self.mute_btn = RoundButton(
+            self.inner, "", self._toggle_mute, width=380, height=42,
+            app_bg=self.mid, font=(app.font_ui, 10, "bold"))
+        self.mute_btn.pack(pady=(2, 4))
 
         self._section("Фоновая музыка")
         self.track_frame = tk.Frame(self.inner, bg=self.mid)
@@ -181,6 +245,59 @@ class SettingsScreen(Screen):
         if snd is not None:
             snd.set_music(on)
 
+    def _paint_volumes(self):
+        self.music_vol.set_value(int(self.app.save.get("music_volume", 70)))
+        self.sound_vol.set_value(int(self.app.save.get("sound_volume", 80)))
+        on = bool(self.app.save.get("mute", False))
+        btn = self.mute_btn
+        btn.text = ("Беззвучный режим:  ВКЛ \u2713" if on
+                    else "Беззвучный режим:  ВЫКЛ \u2717")
+        btn.base_bg = ACCENT_DARK if on else PANEL
+        btn.base_fg = "#c9ffd4" if on else TEXT
+        btn.hover_bg = blend(btn.base_bg, "#ffffff", 0.12)
+        btn.press_bg = blend(btn.base_bg, "#000000", 0.18)
+        btn.repaint()
+
+    def _on_music_vol(self, v):
+        self.app.save["music_volume"] = v
+        self.music_vol.set_value(v)
+        if self._music_vol_job is not None:
+            try:
+                self.app.after_cancel(self._music_vol_job)
+            except Exception:
+                pass
+        self._music_vol_job = self.app.after(350, self._apply_music_vol)
+
+    def _apply_music_vol(self):
+        self._music_vol_job = None
+        self.app.commit()
+        snd = getattr(self.app, "sound", None)
+        if snd is not None:
+            snd.apply_music_volume()
+
+    def _on_sound_vol(self, v):
+        self.app.save["sound_volume"] = v
+        self.sound_vol.set_value(v)
+        if self._sound_vol_job is not None:
+            try:
+                self.app.after_cancel(self._sound_vol_job)
+            except Exception:
+                pass
+        self._sound_vol_job = self.app.after(350, self._apply_sound_vol)
+
+    def _apply_sound_vol(self):
+        self._sound_vol_job = None
+        self.app.commit()
+
+    def _toggle_mute(self):
+        on = not self.app.save.get("mute", False)
+        self.app.save["mute"] = on
+        self.app.commit()
+        self._paint_volumes()
+        snd = getattr(self.app, "sound", None)
+        if snd is not None:
+            snd.set_mute(on)
+
     def _paint_au(self):
         on = bool(self.app.save.get("autoupdate", True))
         btn = self.au_btn
@@ -240,6 +357,7 @@ class SettingsScreen(Screen):
         self._paint_sound()
         self._paint_music()
         self._paint_au()
+        self._paint_volumes()
         self._paint_tracks()
         p = self.preview
         p.delete("all")
