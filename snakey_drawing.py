@@ -510,6 +510,40 @@ def draw_acc(c, cx, cy, kind, phase=0.0, tags=""):
                       outline="#ffe14d", width=2, tags=tags)
         c.create_oval(cx - 2.5, top - 1.5, cx + 2.5, top + 3.5, fill="#fff3c4",
                       outline="", tags=tags)
+    elif kind == "bandana":
+        c.create_polygon(cx - 9, top + 1, cx + 9, top + 1, cx + 8, top + 7,
+                         cx - 8, top + 7, fill="#d6336c", outline="#9e1e4a", tags=tags)
+        c.create_polygon(cx + 7, top + 5, cx + 13, top + 3, cx + 11, top + 9,
+                         fill="#d6336c", outline="#9e1e4a", tags=tags)
+        c.create_oval(cx - 2, top + 2, cx + 2, top + 6, fill="#f0f6fc",
+                      outline="", tags=tags)
+    elif kind == "cactus":
+        c.create_rectangle(cx - 5, top + 5, cx + 5, top + 10, fill="#c98a5a",
+                           outline="#8a5c34", tags=tags)
+        c.create_rectangle(cx - 3, top - 5, cx + 3, top + 5, fill="#4d9e3a",
+                           outline="#2f7a22", tags=tags)
+        c.create_oval(cx - 6, top - 2, cx - 2, top + 4, fill="#4d9e3a",
+                      outline="#2f7a22", tags=tags)
+        c.create_oval(cx + 2, top - 4, cx + 6, top + 2, fill="#4d9e3a",
+                      outline="#2f7a22", tags=tags)
+        c.create_line(cx - 4, top - 3, cx - 4, top - 1, fill="#e0f0c8", tags=tags)
+        c.create_line(cx + 4, top - 2, cx + 4, top, fill="#e0f0c8", tags=tags)
+    elif kind == "dragonling":
+        flap = math.sin(phase * 3) * 3
+        c.create_polygon(cx - 4, top + 2, cx - 12, top - 2 + flap, cx - 5, top + 6,
+                         fill="#39d2c0", outline="#1d8a7a", tags=tags)
+        c.create_polygon(cx + 4, top + 2, cx + 12, top - 2 + flap, cx + 5, top + 6,
+                         fill="#39d2c0", outline="#1d8a7a", tags=tags)
+        c.create_oval(cx - 5, top - 2, cx + 5, top + 8, fill="#3fff9e",
+                      outline="#1d8a5a", tags=tags)
+        c.create_polygon(cx - 4, top - 1, cx - 2, top - 5, cx - 1, top - 1,
+                         fill="#e0fff0", outline="", tags=tags)
+        c.create_polygon(cx + 4, top - 1, cx + 2, top - 5, cx + 1, top - 1,
+                         fill="#e0fff0", outline="", tags=tags)
+        c.create_oval(cx - 3, top + 1, cx - 1, top + 3, fill="#22262b",
+                      outline="", tags=tags)
+        c.create_oval(cx + 1, top + 1, cx + 3, top + 3, fill="#22262b",
+                      outline="", tags=tags)
     else:
         c.create_oval(cx - 6, top - 2, cx + 6, top + 8, fill=ACCENT,
                       outline="#2a8a3a", tags=tags)

@@ -1,8 +1,14 @@
 CELL = 24
 COLS = 24
 ROWS = 18
-VERSION = "1.0"
+VERSION = "1.1"
 CHANGELOG = [
+    ("1.1", [
+        "+3 цвета змейки: Оливковый, Ежевика и градиент «Морозная дымка»",
+        "+3 фона: Джунгли, Индиго, Персиковый рассвет",
+        "+3 аксессуара: Пиратская бандана, Кактус, Дракончик",
+        "Интерактивное автообновление: при выходе новой версии игра предлагает обновиться (кнопки «Позже» и «Обновить»), обновление скачивается атомарно и игра перезапускается сама",
+    ]),
     ("1.0", [
         "РЕЛИЗ 1.0: полный аудит всех 14 модулей, исправления и оптимизации без потери функционала",
         "Прогресс теперь сохраняется атомарно — файл сохранения не повреждается при сбое или выключении ПК",
@@ -197,6 +203,9 @@ COLORS = [
     {"name": "Нефрит", "id": "#00a86b", "price": 200, "level": 19},
     {"name": "Ультрафиолет", "id": "#8a2be2", "price": 220, "level": 21},
     {"name": "Огненный опал", "id": "#ff6a00", "price": 240, "level": 22},
+    {"name": "Оливковый", "id": "#9aab3f", "price": 100},
+    {"name": "Ежевика", "id": "#6b2f8a", "price": 120},
+    {"name": "Морозная дымка", "id": "grad_frost", "price": 200},
 ]
 GRADIENTS = {
     "grad_sunset": ("#ff5c5c", "#ffa657"),
@@ -205,6 +214,7 @@ GRADIENTS = {
     "grad_candy": ("#f778ba", "#d2a8ff"),
     "grad_gold": ("#e3b341", "#fff3c4"),
     "grad_aurora": ("#3fff9e", "#58a6ff"),
+    "grad_frost": ("#7ee8ff", "#e0faff"),
 }
 THEMES = [
     {"name": "Ночь", "id": "night", "price": 0, "bonus": 1.0, "level": 1, "decor": "stars",
@@ -267,6 +277,12 @@ THEMES = [
      "grad": ("#12081f", "#33184f"), "grid_a": "#12081f", "grid_b": "#33184f", "border": "#8a5cd9"},
     {"name": "Кибер", "id": "cyber", "price": 400, "bonus": 1.8, "level": 30, "decor": "glow",
      "grad": ("#050a14", "#0f2338"), "grid_a": "#050a14", "grid_b": "#0f2338", "border": "#00e5ff"},
+    {"name": "Джунгли", "id": "jungle", "price": 240, "bonus": 1.5, "level": 20, "decor": "bushes",
+     "grad": ("#03180a", "#0a3d1c"), "grid_a": "#03180a", "grid_b": "#0a3d1c", "border": "#1d8a3a"},
+    {"name": "Индиго", "id": "indigo", "price": 260, "bonus": 1.55, "level": 22, "decor": "stars",
+     "grad": ("#0a0a2a", "#1c1c5a"), "grid_a": "#0a0a2a", "grid_b": "#1c1c5a", "border": "#5a5ac9"},
+    {"name": "Персиковый рассвет", "id": "peachy", "price": 280, "bonus": 1.6, "level": 24, "decor": "petals",
+     "grad": ("#3a1c10", "#6b3a20"), "grid_a": "#3a1c10", "grid_b": "#6b3a20", "border": "#d69a6b"},
 ]
 THEME_BY_ID = {t["id"]: t for t in THEMES}
 FOOD_ITEMS = [
@@ -344,6 +360,9 @@ ACCESSORIES = [
     {"name": "Лисёнок", "id": "foxy", "price": 280, "level": 20},
     {"name": "Штормовая корона", "id": "stormcrown", "price": 320, "level": 22},
     {"name": "Нова", "id": "nova", "price": 360, "level": 24},
+    {"name": "Пиратская бандана", "id": "bandana", "price": 150, "level": 10},
+    {"name": "Кактус", "id": "cactus", "price": 210, "level": 15},
+    {"name": "Дракончик", "id": "dragonling", "price": 300, "level": 21},
 ]
 ACC_BY_ID = {a["id"]: a for a in ACCESSORIES}
 
