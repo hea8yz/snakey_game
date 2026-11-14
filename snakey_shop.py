@@ -25,7 +25,7 @@ from snakey_content import (
 from snakey_drawing import draw_acc, draw_food
 from snakey_save import check_achievements, level_from_exp
 from snakey_utils import blend, hsv_hex, info_text, round_rect
-from snakey_widgets import GradientBG, RoundButton, Screen
+from snakey_widgets import GradientBG, RoundButton, Screen, refocus_app
 
 
 _OPEN_TIPS = set()
@@ -201,6 +201,8 @@ class ShopCard(tk.Canvas):
                 tip.destroy()
             except tk.TclError:
                 pass
+            # уничтоженный тултип не должен уносить фокус клавиатуры
+            refocus_app(self.app)
 
     def _click(self, _event=None):
         self._hide_tip()

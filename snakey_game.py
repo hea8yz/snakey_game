@@ -407,6 +407,10 @@ class GameScreen(MinigameMixin, Screen):
             elif key == "return":
                 self.new_game()
             return
+        if self.job is None and not self.paused:
+            # страховка: если игровой цикл остановился (потерянный after),
+            # любой ввод моментально его оживляет
+            self._schedule()
         moves = {
             "up": (-1, 0), "w": (-1, 0),
             "down": (1, 0), "s": (1, 0),

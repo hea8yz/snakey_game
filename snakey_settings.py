@@ -197,10 +197,13 @@ class SettingsScreen(Screen):
         self._paint_au()
 
     def _paint_tracks(self):
-        for w in self.track_frame.winfo_children():
-            w.destroy()
         owned = set(self.app.save.get("owned_music", ["classic"]))
         cur = self.app.save.get("music_track", "classic")
+        if getattr(self, "_tracks_key", None) == (cur, tuple(sorted(owned))):
+            return  # \u043d\u0438\u0447\u0435\u0433\u043e \u043d\u0435 \u0438\u0437\u043c\u0435\u043d\u0438\u043b\u043e\u0441\u044c \u2014 \u043a\u043d\u043e\u043f\u043a\u0438 \u043d\u0435 \u043f\u0435\u0440\u0435\u0441\u043e\u0437\u0434\u0430\u0451\u043c
+        self._tracks_key = (cur, tuple(sorted(owned)))
+        for w in self.track_frame.winfo_children():
+            w.destroy()
         for tr in MUSIC_TRACKS:
             key = tr["id"]
             selected = key == cur
@@ -272,44 +275,48 @@ class SettingsScreen(Screen):
                 card.grid(row=i // 5, column=i % 5, padx=4, pady=4,
                           sticky="nsew")
         level = level_from_exp(self.app.save.get("exp", 0))
-        for w in self.diff_frame.winfo_children():
-            w.destroy()
         current = self.app.save.get("speed", "normal")
         if DIFFICULTIES.get(current, DIFFICULTIES["normal"])["level"] > level:
             current = "normal"
         cfg = DIFFICULTIES[current]
-        for key, dcfg in DIFFICULTIES.items():
-            if dcfg["level"] > level:
-                btn = RoundButton(self.diff_frame, f"🔒 ур. {dcfg['level']}",
-                                  width=126, height=42, bg=LOCKED_BG, fg=DIM,
-                                  app_bg=self.mid,
-                                  font=(self.app.font_ui, 10, "bold"))
-            else:
-                selected = key == current
-                btn = RoundButton(
-                    self.diff_frame, dcfg["label"],
-                    command=(lambda k=key: self._set_speed(k)),
-                    width=126, height=42,
-                    bg=ACCENT_DARK if selected else PANEL,
-                    fg="#c9ffd4" if selected else TEXT, app_bg=self.mid,
-                    font=(self.app.font_ui, 10, "bold"))
-            btn.pack(side="left", padx=4)
-        for w in self.size_frame.winfo_children():
-            w.destroy()
+        if getattr(self, "_diff_key", None) != (current, level):
+            self._diff_key = (current, level)
+            for w in self.diff_frame.winfo_children():
+                w.destroy()
+            for key, dcfg in DIFFICULTIES.items():
+                if dcfg["level"] > level:
+                    btn = RoundButton(self.diff_frame, f"🔒 ур. {dcfg['level']}",
+                                      width=126, height=42, bg=LOCKED_BG, fg=DIM,
+                                      app_bg=self.mid,
+                                      font=(self.app.font_ui, 10, "bold"))
+                else:
+                    selected = key == current
+                    btn = RoundButton(
+                        self.diff_frame, dcfg["label"],
+                        command=(lambda k=key: self._set_speed(k)),
+                        width=126, height=42,
+                        bg=ACCENT_DARK if selected else PANEL,
+                        fg="#c9ffd4" if selected else TEXT, app_bg=self.mid,
+                        font=(self.app.font_ui, 10, "bold"))
+                btn.pack(side="left", padx=4)
         cur_size = self.app.save.get("window_size", "medium")
         if cur_size not in WINDOW_SIZES:
             cur_size = "medium"
-        for key in WINDOW_SIZE_ORDER:
-            w_, h_ = WINDOW_SIZES[key]
-            selected = key == cur_size
-            btn = RoundButton(
-                self.size_frame, f"{WINDOW_SIZE_LABELS[key]}  {w_}\u00d7{h_}",
-                command=(lambda k=key: self._set_size(k)),
-                width=150, height=42,
-                bg=ACCENT_DARK if selected else PANEL,
-                fg="#c9ffd4" if selected else TEXT, app_bg=self.mid,
-                font=(self.app.font_ui, 10, "bold"))
-            btn.pack(side="left", padx=4)
+        if getattr(self, "_size_key", None) != cur_size:
+            self._size_key = cur_size
+            for w in self.size_frame.winfo_children():
+                w.destroy()
+            for key in WINDOW_SIZE_ORDER:
+                w_, h_ = WINDOW_SIZES[key]
+                selected = key == cur_size
+                btn = RoundButton(
+                    self.size_frame, f"{WINDOW_SIZE_LABELS[key]}  {w_}\u00d7{h_}",
+                    command=(lambda k=key: self._set_size(k)),
+                    width=150, height=42,
+                    bg=ACCENT_DARK if selected else PANEL,
+                    fg="#c9ffd4" if selected else TEXT, app_bg=self.mid,
+                    font=(self.app.font_ui, 10, "bold"))
+                btn.pack(side="left", padx=4)
         theme = THEME_BY_ID.get(self.app.save.get("theme"), THEMES[0])
         total_c = cfg["reward"] * theme.get("bonus", 1.0)
         total_e = cfg["exp_reward"] * theme.get("bonus", 1.0)
