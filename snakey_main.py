@@ -36,6 +36,7 @@ for _m in (_content, _save, _utils, _drawing, _assets, _widgets, _shop,
 
 # ---------------- Автообновление ----------------
 import os as _os
+import sys as _sys
 import tempfile as _tempfile
 import threading as _threading
 import urllib.request as _urllib_request
@@ -44,15 +45,19 @@ REPO_RAW = "https://raw.githubusercontent.com/hea8yz/snakey_game/main/"
 
 
 def _local_version():
-    try:
-        p = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
-                          "VERSION")
-        with open(p, encoding="utf-8") as f:
-            v = f.read().strip()
-            if v:
-                return v
-    except Exception:
-        pass
+    # в exe-сборке VERSION лежит рядом с exe; при запуске из исходников — рядом с кодом
+    bases = []
+    if getattr(_sys, "frozen", False):
+        bases.append(_os.path.dirname(_os.path.abspath(_sys.executable)))
+    bases.append(_os.path.dirname(_os.path.abspath(__file__)))
+    for base in bases:
+        try:
+            with open(_os.path.join(base, "VERSION"), encoding="utf-8") as f:
+                v = f.read().strip()
+                if v:
+                    return v
+        except Exception:
+            pass
     return "1.0"
 
 
@@ -70,6 +75,11 @@ def _fetch_text(url, timeout=3):
 
 def _apply_update(new_version, app=None):
     """Скачивает файлы из репозитория во temp и атомарно заменяет их."""
+    if getattr(_sys, "frozen", False):
+        # в exe код зашит внутрь файла — скачивать .py бессмысленно,
+        # предлагаем пересобрать exe через build.bat
+        _show_update_popup(app, new_version, frozen=True)
+        return
     base = _os.path.dirname(_os.path.abspath(__file__))
     try:
         manifest = _fetch_text(REPO_RAW + "MANIFEST.txt", timeout=5)
@@ -106,7 +116,7 @@ def _apply_update(new_version, app=None):
         app.after(0, lambda: _show_update_popup(app, new_version))
 
 
-def _show_update_popup(app, new_version):
+def _show_update_popup(app, new_version, frozen=False):
     try:
         win = tk.Toplevel(app)
         win.title("SNAKEY — обновление")
@@ -117,12 +127,21 @@ def _show_update_popup(app, new_version):
         except Exception:
             pass
         fam = getattr(app, "font_ui", "Helvetica")
-        tk.Label(win, text="✨  Игра обновлена до версии " + new_version + "!",
-                 bg="#101820", fg="#3fff9e",
-                 font=(fam, 13, "bold")).pack(padx=26, pady=(18, 6))
-        tk.Label(win, text="Перезапустите игру, чтобы изменения вступили в силу.",
-                 bg="#101820", fg="#cdd9e5",
-                 font=(fam, 10)).pack(padx=26, pady=(0, 12))
+        if frozen:
+            tk.Label(win, text="✨  Доступна новая версия " + new_version + "!",
+                     bg="#101820", fg="#3fff9e",
+                     font=(fam, 13, "bold")).pack(padx=26, pady=(18, 6))
+            tk.Label(win, text="Код в exe зашит внутрь: запусти build.bat в папке игры,\n"
+                               "чтобы пересобрать SNAKEY.exe с обновлением.",
+                     bg="#101820", fg="#cdd9e5",
+                     font=(fam, 10)).pack(padx=26, pady=(0, 12))
+        else:
+            tk.Label(win, text="✨  Игра обновлена до версии " + new_version + "!",
+                     bg="#101820", fg="#3fff9e",
+                     font=(fam, 13, "bold")).pack(padx=26, pady=(18, 6))
+            tk.Label(win, text="Перезапустите игру, чтобы изменения вступили в силу.",
+                     bg="#101820", fg="#cdd9e5",
+                     font=(fam, 10)).pack(padx=26, pady=(0, 12))
         tk.Button(win, text="OK",
                   command=lambda: (win.destroy(), refocus_app(app)),
                   bg="#1f6feb", fg="#ffffff", activebackground="#388bfd",
