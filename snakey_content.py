@@ -1,8 +1,14 @@
 CELL = 24
 COLS = 24
 ROWS = 18
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 CHANGELOG = [
+    ("1.0.3", [
+        "+3 \u0446\u0432\u0435\u0442\u0430 \u0437\u043c\u0435\u0439\u043a\u0438: \u0422\u0435\u0440\u0440\u0430\u043a\u043e\u0442\u0430, \u0425\u0432\u043e\u0439\u043d\u044b\u0439 \u0438 \u0433\u0440\u0430\u0434\u0438\u0435\u043d\u0442 \u00ab\u041b\u0435\u0442\u043d\u0438\u0439 \u0434\u043e\u0436\u0434\u044c\u00bb",
+        "+3 \u0444\u043e\u043d\u0430: \u0411\u0430\u043c\u0431\u0443\u043a, \u041a\u0440\u043e\u0432\u0430\u0432\u0430\u044f \u043b\u0443\u043d\u0430, \u041b\u0435\u0434\u044f\u043d\u0430\u044f \u0431\u0435\u0437\u0434\u043d\u0430",
+        "+3 \u0430\u043a\u0441\u0435\u0441\u0441\u0443\u0430\u0440\u0430: \u0410\u0440\u0431\u0443\u0437\u043d\u0430\u044f \u0434\u043e\u043b\u044c\u043a\u0430, \u0421\u043d\u0435\u0436\u043d\u044b\u0439 \u0448\u0430\u0440, \u041f\u0435\u0440\u043e \u0444\u0435\u043d\u0438\u043a\u0441\u0430",
+        "\u041e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435 \u0434\u043b\u044f \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0438 \u0430\u0432\u0442\u043e\u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f \u0447\u0435\u0440\u0435\u0437 update.bat",
+    ]),
     ("1.0.2", [
         "Новый способ обновления: кнопка «Обновить» просто закрывает игру (файлы не трогаются), а обновляет папку игры новый update.bat — он сам скачивает из репозитория только изменённые файлы и добавляет новые",
         "update.bat проверяет версию, сравнивает файлы по содержимому (не качает то, что не изменилось), добавляет новые файлы из репозитория "
@@ -211,6 +217,9 @@ COLORS = [
     {"name": "Оливковый", "id": "#9aab3f", "price": 100},
     {"name": "Ежевика", "id": "#6b2f8a", "price": 120},
     {"name": "Морозная дымка", "id": "grad_frost", "price": 200},
+    {"name": "Терракота", "id": "#c96a4a", "price": 100},
+    {"name": "Хвойный", "id": "#2f5d3a", "price": 120},
+    {"name": "Летний дождь", "id": "grad_rain", "price": 220},
 ]
 GRADIENTS = {
     "grad_sunset": ("#ff5c5c", "#ffa657"),
@@ -220,6 +229,7 @@ GRADIENTS = {
     "grad_gold": ("#e3b341", "#fff3c4"),
     "grad_aurora": ("#3fff9e", "#58a6ff"),
     "grad_frost": ("#7ee8ff", "#e0faff"),
+    "grad_rain": ("#4a9de8", "#cde8ff"),
 }
 THEMES = [
     {"name": "Ночь", "id": "night", "price": 0, "bonus": 1.0, "level": 1, "decor": "stars",
@@ -288,6 +298,12 @@ THEMES = [
      "grad": ("#0a0a2a", "#1c1c5a"), "grid_a": "#0a0a2a", "grid_b": "#1c1c5a", "border": "#5a5ac9"},
     {"name": "Персиковый рассвет", "id": "peachy", "price": 280, "bonus": 1.6, "level": 24, "decor": "petals",
      "grad": ("#3a1c10", "#6b3a20"), "grid_a": "#3a1c10", "grid_b": "#6b3a20", "border": "#d69a6b"},
+    {"name": "Бамбук", "id": "bamboo", "price": 300, "bonus": 1.65, "level": 26, "decor": "bushes",
+     "grad": ("#04180a", "#0c3a18"), "grid_a": "#04180a", "grid_b": "#0c3a18", "border": "#3aa04a"},
+    {"name": "Кровавая луна", "id": "bloodmoon", "price": 380, "bonus": 1.75, "level": 28, "decor": "embers",
+     "grad": ("#1a0208", "#4a0a14"), "grid_a": "#1a0208", "grid_b": "#4a0a14", "border": "#c92a4a"},
+    {"name": "Ледяная бездна", "id": "iceabyss", "price": 420, "bonus": 1.85, "level": 32, "decor": "aurora",
+     "grad": ("#020a14", "#0a2438"), "grid_a": "#020a14", "grid_b": "#0a2438", "border": "#5fa8d6"},
 ]
 THEME_BY_ID = {t["id"]: t for t in THEMES}
 FOOD_ITEMS = [
@@ -368,6 +384,9 @@ ACCESSORIES = [
     {"name": "Пиратская бандана", "id": "bandana", "price": 150, "level": 10},
     {"name": "Кактус", "id": "cactus", "price": 210, "level": 15},
     {"name": "Дракончик", "id": "dragonling", "price": 300, "level": 21},
+    {"name": "Арбузная долька", "id": "melonhat", "price": 240, "level": 16},
+    {"name": "Снежный шар", "id": "snowglobe", "price": 260, "level": 18},
+    {"name": "Перо феникса", "id": "phoenixfeather", "price": 340, "level": 23},
 ]
 ACC_BY_ID = {a["id"]: a for a in ACCESSORIES}
 

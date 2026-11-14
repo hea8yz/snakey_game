@@ -544,6 +544,38 @@ def draw_acc(c, cx, cy, kind, phase=0.0, tags=""):
                       outline="", tags=tags)
         c.create_oval(cx + 1, top + 1, cx + 3, top + 3, fill="#22262b",
                       outline="", tags=tags)
+    elif kind == "melonhat":
+        c.create_polygon(cx - 9, top + 6, cx + 9, top + 6, cx, top - 6,
+                         fill="#ff4f5e", outline="#2f7a3a", tags=tags)
+        c.create_polygon(cx - 8, top + 5, cx + 8, top + 5, cx, top - 4,
+                         fill="#ff7a88", outline="", tags=tags)
+        c.create_oval(cx - 4, top + 1, cx - 2, top + 3, fill="#2f7a3a",
+                      outline="", tags=tags)
+        c.create_oval(cx + 2, top, cx + 4, top + 2, fill="#2f7a3a",
+                      outline="", tags=tags)
+        c.create_oval(cx - 1, top + 3, cx + 1, top + 5, fill="#2f7a3a",
+                      outline="", tags=tags)
+    elif kind == "snowglobe":
+        sway = math.sin(phase * 2) * 1.5
+        c.create_oval(cx - 7, top - 5, cx + 7, top + 9, fill="#cde8ff",
+                      outline="#5fa8d6", tags=tags)
+        c.create_polygon(cx - 3, top + 7, cx + 3, top + 7, cx, top - 1 + sway,
+                         fill="#e0f0c8", outline="#2f7a3a", tags=tags)
+        for dx, dy in ((-4, 0), (3, -2), (-1, -4), (4, 3), (-5, 3)):
+            c.create_oval(cx + dx - 0.8, top + dy - 0.8, cx + dx + 0.8,
+                          top + dy + 0.8, fill="#f0f6fc", outline="", tags=tags)
+        c.create_rectangle(cx - 4, top + 8, cx + 4, top + 11, fill="#8a5c34",
+                           outline="#5c3c1e", tags=tags)
+    elif kind == "phoenixfeather":
+        sway = math.sin(phase * 3) * 2
+        c.create_polygon(cx - 2, top + 10, cx + 2, top + 10, cx + 3 + sway,
+                         top - 2, cx - 1 + sway, top - 6,
+                         fill="#ff6a35", outline="#c94a1d", tags=tags)
+        c.create_polygon(cx - 1, top + 8, cx + 1, top + 8, cx + 2 + sway,
+                         top - 1, cx + sway, top - 3,
+                         fill="#ffe14d", outline="", tags=tags)
+        c.create_line(cx + sway, top - 4, cx, top + 9, fill="#fff3c4",
+                      tags=tags)
     else:
         c.create_oval(cx - 6, top - 2, cx + 6, top + 8, fill=ACCENT,
                       outline="#2a8a3a", tags=tags)
