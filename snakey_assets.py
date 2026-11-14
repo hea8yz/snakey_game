@@ -12,7 +12,16 @@ from collections import deque
 from pathlib import Path
 
 
-ASSETS_DIR = Path(__file__).resolve().parent / "assets"
+def _base_dir():
+    # в собранном exe (PyInstaller) код распакован во временную папку, а ресурсы
+    # (assets/, VERSION) лежат рядом с exe — берём их оттуда, чтобы файлы
+    # оставались в файловой системе и их можно было менять/модить без пересборки
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+ASSETS_DIR = _base_dir() / "assets"
 SOUNDS_DIR = ASSETS_DIR / "sounds"
 IMAGES_DIR = ASSETS_DIR / "images"
 SFX_NAMES = ("click", "eat", "death", "coin", "levelup", "win", "lose")

@@ -2,3 +2,9 @@ __pycache__/
 *.pyc
 assets/sounds/*_v*.wav
 assets/sounds/*.tmp
+
+# Сборка exe (build.bat)
+SNAKEY.exe
+build/
+dist/
+SNAKEY.spec
