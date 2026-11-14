@@ -239,6 +239,13 @@ class App(tk.Tk):
         frame = cls(self.container, self)
         self.frames[name] = frame
         frame.grid(row=0, column=0, sticky="nsew")
+        # новый grid-виджет отображается ПОВЕРХ предыдущих в той же ячейке —
+        # опускаем его вниз, чтобы он не закрыл текущий экран
+        frame.lower()
+        try:
+            self.frames[self.current].tkraise()
+        except Exception:
+            pass
         return frame
 
     def _prebuild_rest(self, i=0):
@@ -246,6 +253,11 @@ class App(tk.Tk):
         order = ("MiniScreen", "SettingsScreen", "ShopScreen", "AchScreen",
                  "GameScreen")
         if i >= len(order):
+            # страховка: текущий экран всегда поверх всех
+            try:
+                self.frames[self.current].tkraise()
+            except Exception:
+                pass
             return
         try:
             self._make_frame(order[i])
