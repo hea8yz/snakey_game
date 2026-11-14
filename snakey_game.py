@@ -100,7 +100,8 @@ class GameScreen(MinigameMixin, Screen):
         self.revive_used = False
         self.eaten_count = 0
         self.delivered = 0
-        self.carrying = False
+        self.carrying = None
+        self.mg3_coins = 0
         self.mg_phase = None
         self.target_color = None
         self.base_hue = 0.0
@@ -185,7 +186,8 @@ class GameScreen(MinigameMixin, Screen):
         self.revive_used = False
         self.eaten_count = 0
         self.delivered = 0
-        self.carrying = False
+        self.carrying = None
+        self.mg3_coins = 0
         self.mg_phase = None
         self.target_color = None
         self.base_hue = 0.0
@@ -229,9 +231,9 @@ class GameScreen(MinigameMixin, Screen):
         elif self.mg == "mg2":
             self._mg2_spawn_base()
         elif self.mg == "mg3":
-            self._spawn_mg3_apple()
-            self._spawn_mg3_apple()
-            self._spawn_mg3_apple()
+            self._mg3_fill_apples()
+            if random.random() < 0.8:
+                self._spawn_extra_food()
         elif self.mg is not None:
             self._mg_setup()
         else:
@@ -341,6 +343,14 @@ class GameScreen(MinigameMixin, Screen):
             self._food_born[pos] = self.tick_count
             self._foods_dirty = True
 
+    def _mg3_fill_apples(self):
+        """Держим на поле 3 яблока: больше еды — чаще доставка."""
+        while sum(1 for k, *_ in self.foods if k == "apple") < 3:
+            before = len(self.foods)
+            self._spawn_mg3_apple()
+            if len(self.foods) == before:
+                break
+
     def _mg2_spawn_base(self):
         self.base_hue = random.random()
         self.target_color = hsv_hex(self.base_hue, 0.8, 0.95)
@@ -392,7 +402,7 @@ class GameScreen(MinigameMixin, Screen):
                       (mid_y, COLS // 2 - 2)]
         self.direction = (0, 1)
         self.next_direction = self.direction
-        self.carrying = False
+        self.carrying = None
         self._draw()
         self._schedule()
 
@@ -562,9 +572,17 @@ class GameScreen(MinigameMixin, Screen):
                 self._mg2_pick(eaten)
                 return
             if self.mg == "mg3":
-                self.carrying = True
+                self.carrying = eaten[0]
                 sfx("eat")
-                self._spawn_mg3_apple()
+                self._mg3_fill_apples()
+                # купленные фрукты появляются с теми же шансами, что в обычном режиме
+                if eaten[0] == "apple":
+                    if (not any(k not in ("apple", "poison")
+                                for k, *_ in self.foods)
+                            and random.random() < 0.8):
+                        self._spawn_extra_food()
+                elif random.random() < FOOD_BY_ID[eaten[0]]["chance"]:
+                    self._spawn_extra_food()
             elif self.mg == "mg5" and eaten[0] == "golden":
                 self.score += 5
                 self.speed = self.cfg["speed"]
@@ -628,12 +646,15 @@ class GameScreen(MinigameMixin, Screen):
             zx = COLS * CELL / 2
             zy = ROWS * CELL
             if (hx - zx) ** 2 + (hy - zy) ** 2 <= MG3_ZONE_R ** 2:
-                self.carrying = False
+                kind = self.carrying
+                val = 12 if kind == "apple" else 12 + FOOD_BY_ID[kind]["value"] * 3
+                self.mg3_coins += val
+                self.carrying = None
                 self.delivered += 1
                 sfx("coin")
                 self.score = self.delivered
                 self.score_var.set(f"Яблоки: {self.delivered}")
-                self.popups.append([hx, hy - 14, "+12 ◎", 10, GOLD])
+                self.popups.append([hx, hy - 14, f"+{val} ◎", 10, GOLD])
                 if not self.low:
                     for _ in range(8):
                         ang = random.uniform(0, 2 * math.pi)
@@ -693,7 +714,7 @@ class GameScreen(MinigameMixin, Screen):
                 earned = 0
                 exp_gain = round(3 * exp_mult)
         elif mode == "mg3":
-            earned = round(self.delivered * 12 * reward)
+            earned = round(self.mg3_coins * reward)
             exp_gain = round(self.delivered * 6 * exp_mult)
         elif mode == "mg4":
             if ok:
@@ -812,7 +833,7 @@ class GameScreen(MinigameMixin, Screen):
         elif mode == "mg3":
             score_line = (f"Доставлено: {self.delivered}      "
                           f"Рекорд: {st['mg3_best']}")
-            coin_line = f"+{earned} монет  ({self.delivered} × 12 × {reward:g})"
+            coin_line = f"+{earned} монет  ({self.mg3_coins} × {reward:g})"
         elif mode == "mg6":
             score_line = (f"Время: {self.score:.1f} с      "
                           f"Рекорд: {st['mg6_best']} с")
@@ -1198,8 +1219,8 @@ class GameScreen(MinigameMixin, Screen):
         if acc != "none":
             draw_acc(c, cx, cy, acc, self.tick_count * 0.35, tags="head")
         if self.mg == "mg3" and self.carrying and not self.game_over:
-            c.create_oval(cx - 6, cy - 22, cx + 6, cy - 10, fill=RED,
-                          outline="#c93a3a", tags="head")
+            draw_food(c, cx, cy - 16, self.carrying, self.tick_count * 0.35,
+                      simple=self.low, tags="head")
         if self.mg == "mg7":
             # тьма рисуется ПОСЛЕ еды и змейки: вне фонарика ничего не видно
             self._mg7_darkness()
