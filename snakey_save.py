@@ -46,6 +46,8 @@ def grant_ach_reward(save, ach):
         if iid not in lst:
             lst.append(iid)
 def check_achievements(save):
+    """1.1: достижение только отмечается выполненным — награду игрок
+    забирает кликом по карточке во вкладке «Достижения» (claim_ach_reward)."""
     done = save.setdefault("ach_done", [])
     pending = save.setdefault("pending_ach", [])
     newly = []
@@ -54,10 +56,28 @@ def check_achievements(save):
             continue
         if ach_value(ach, save) >= ach["goal"]:
             done.append(ach["id"])
-            grant_ach_reward(save, ach)
             newly.append(ach["name"])
     pending.extend(newly)
     return newly
+
+
+def ach_claimable(save, ach):
+    """Выполнено, но награда ещё не забрана."""
+    return (ach["id"] in save.get("ach_done", [])
+            and ach["id"] not in save.get("ach_claimed", []))
+
+
+def claim_ach_reward(save, ach):
+    """Забрать награду за выполненное достижение. False — если достижение
+    не выполнено или награда уже забрана."""
+    if ach["id"] not in save.get("ach_done", []):
+        return False
+    claimed = save.setdefault("ach_claimed", [])
+    if ach["id"] in claimed:
+        return False
+    claimed.append(ach["id"])
+    grant_ach_reward(save, ach)
+    return True
 DEFAULT_SAVE = {
     "highscore": 0,
     "coins": 0,
@@ -84,16 +104,24 @@ DEFAULT_SAVE = {
     "autoupdate": True,
     "stats": {},
     "ach_done": [],
+    "ach_claimed": [],
     "pending_ach": [],
 }
 def load_save():
     data = json.loads(json.dumps(DEFAULT_SAVE))
+    loaded = None
     try:
         loaded = json.loads(SAVE_FILE.read_text())
         if isinstance(loaded, dict):
             data.update(loaded)
+        else:
+            loaded = None
     except (OSError, ValueError):
-        pass
+        loaded = None
+    # миграция 1.1: ранее награды выдавались автоматически, поэтому все
+    # уже выполненные достижения считаются полученными
+    if loaded is not None and "ach_claimed" not in loaded:
+        data["ach_claimed"] = list(data.get("ach_done", []))
     return data
 def save_save(data):
     # атомарная запись: сперва во временный файл, затем replace. Прямая запись

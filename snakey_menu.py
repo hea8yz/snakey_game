@@ -453,11 +453,11 @@ class MenuScreen(Screen):
             return True
         win = tk.Toplevel(self)
         self._ach_win = win
-        win.title("Достижение получено!")
+        win.title("Достижение выполнено!")
         win.configure(bg=BG)
         win.resizable(False, False)
         win.transient(self.app)
-        self._borderless(win, "★ Достижение получено!", 380, BG)
+        self._borderless(win, "★ Достижение выполнено!", 380, BG)
         cv = tk.Canvas(win, width=380, height=170, bg=BG, highlightthickness=0)
         cv.pack()
         cx, cyc = 190, 78
@@ -471,8 +471,10 @@ class MenuScreen(Screen):
                        width=3)
         cv.create_text(cx, cyc - 2, text="★",
                        font=(self.app.font_title, 40, "bold"), fill="#c9a8ff")
-        cv.create_text(cx, 152, text="ДОСТИЖЕНИЕ ПОЛУЧЕНО!",
+        cv.create_text(cx, 146, text="ДОСТИЖЕНИЕ ВЫПОЛНЕНО!",
                        font=(self.app.font_title, 15, "bold"), fill="#c9a8ff")
+        cv.create_text(cx, 166, text="Заберите награду во вкладке «Достижения»",
+                       font=(self.app.font_ui, 9), fill=DIM)
         for name in pending[:5]:
             tk.Label(win, text=f"★  {name}", bg=BG, fg=TEXT,
                      font=(self.app.font_ui, 10, "bold")).pack()
