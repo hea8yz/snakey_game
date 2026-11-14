@@ -10,7 +10,7 @@ from snakey_content import (
     ROWS,
     WARN,
 )
-from snakey_utils import blend, round_pts
+from snakey_utils import blend, round_pts, seg_color
 
 
 class MinigameMixin:
@@ -45,10 +45,12 @@ class MinigameMixin:
         elif self.mg == "mg8":
             self._mg8_draw()
         elif self.mg == "mg9":
+            # seg_color резолвит ЛЮБОЙ выбранный цвет (hex, rainbow, градиентные id
+            # вроде "grad_sunset") в реальный hex — сырой id падал в canvas fill
+            base = seg_color(self.app.save.get("selected", "#3fb950"),
+                             0, 1, self.tick_count)
             self._draw_pool_snakes([(self.mg9_b,
-                                      blend(self.app.save.get(
-                                          "selected", "#3fb950"),
-                                          "#00e5ff", 0.35), False)])
+                                      blend(base, "#00e5ff", 0.35), False)])
         elif self.mg == "mg10":
             self._mg10_draw()
 
@@ -142,8 +144,8 @@ class MinigameMixin:
 
     def _mg5_setup(self):
         self._spawn_food("apple")
-        # золотая еда теперь редкая: шанс 35% на старте
-        if random.random() < 0.35:
+        # золотая еда сбрасывает разгон — теперь она большая редкость (15%)
+        if random.random() < 0.15:
             self._spawn_food("golden")
         self.mg5_t = 0.0
 
@@ -224,7 +226,7 @@ class MinigameMixin:
             return
         self._mg6_timer_val = secs
         w = c.winfo_width() or 576
-        cy = 60
+        cy = 100
         txt = f"{secs:.1f} с"
         if not self._mg6_timer_items:
             try:
@@ -298,6 +300,9 @@ class MinigameMixin:
                  (0, cy - r, cx - r, cy + r), (cx + r, cy - r, w, cy + r))):
             c.coords(it, *coords)
         c.coords(self._dark_items[4], cx - r, cy - r, cx + r, cy + r)
+        # еда пересоздаётся при каждом respawn и попадает ПОВЕРХ тьмы —
+        # поднимаем тьму, чтобы фрукты вне фонарика были скрыты
+        c.tag_raise("dark")
 
     def _mg8_setup(self):
         for _ in range(4):
@@ -587,7 +592,9 @@ class MinigameMixin:
         return True
 
     def _mg10_draw(self):
-        sel = self.app.save.get("selected", "#3fb950")
+        # seg_color резолвит градиентные id ("grad_sunset" и т.п.) в hex
+        sel = seg_color(self.app.save.get("selected", "#3fb950"),
+                        0, 1, self.tick_count)
         snakes = []
         for i, snk in enumerate(self.mg_snakes):
             if i == self.mg_active:

@@ -245,6 +245,12 @@ class GameScreen(MinigameMixin, Screen):
         self.low = bool(self.app.save.get("low_spec", False))
         self._foods_dirty = True
         self._slider_dirty = True
+        # в mg6 большой таймер живёт в полотне ползунка — расширяем его вниз,
+        # чтобы таймер был ПОД блоком сложности, а не поверх текстов
+        try:
+            self.slider.configure(height=118 if self.mg == "mg6" else 86)
+        except Exception:
+            pass
         self._mg6_timer_items = []
         self._mg6_timer_val = None
         self._redraw_static()
@@ -567,7 +573,8 @@ class GameScreen(MinigameMixin, Screen):
                 px = eaten[1][1] * CELL + CELL / 2
                 py = eaten[1][0] * CELL + CELL / 2
                 self.popups.append([px, py - 10, "+5 ⚡", 10, GOLD])
-                if random.random() < 0.25:
+                # золотая еда сбрасывает разгон — шанс респавна снижен
+                if random.random() < 0.12:
                     self._spawn_food("golden")
             else:
                 info = FOOD_BY_ID[eaten[0]]
@@ -575,7 +582,12 @@ class GameScreen(MinigameMixin, Screen):
                 self.score += info["value"]
                 sfx("eat")
                 self.score_var.set(f"Счёт: {self.score}")
-                self.speed = max(self.cfg["min"], self.speed - self.cfg["step"])
+                # скорость меняется только там, где она вообще растёт от еды
+                # (step > 0). В mg5 step=0, а min=базовая скорость — старый код
+                # max(min, speed-step) СБРАСЫВАЛ разгон молнии любым яблоком.
+                if self.cfg["step"] > 0:
+                    self.speed = max(self.cfg["min"],
+                                     self.speed - self.cfg["step"])
                 px = eaten[1][1] * CELL + CELL / 2
                 py = eaten[1][0] * CELL + CELL / 2
                 self.popups.append([px, py - 10, f"+{info['value']}", 9, info["color"]])
@@ -1043,31 +1055,32 @@ class GameScreen(MinigameMixin, Screen):
                         c.create_rectangle(x0, y0 + 3, x0 + 10, y1 - 3,
                                            fill="#ffffff", stipple="gray12",
                                            outline="", state="hidden"))
+            # статические подписи: создаются один раз за игру (вместе с delete("all"))
+            bright = DIFF_SLIDER[key][0]
+            c.create_text(w / 2, 36,
+                          text=f"СЛОЖНОСТЬ: {DIFFICULTIES[key]['label']}",
+                          font=(self.app.font_title, 11, "bold"), fill=bright)
+            c.create_text(w / 2, 55,
+                          text=f"◎ ×{self.cfg['reward']:g}    ⭐ ×{self.cfg['exp_reward']:g}",
+                          font=(self.app.font_ui, 10, "bold"), fill=GOLD)
+            parts = ["проходимые границы" if self.cfg["wrap"]
+                     else "смертельные стены"]
+            if self.cfg.get("obstacles"):
+                parts.append(f"препятствия: {self.cfg['obstacles']}")
+            if self.cfg.get("poison"):
+                parts.append("ядовитые фрукты")
+            if self.cfg.get("time"):
+                parts.append(f"таймер {self.cfg['time']} с")
+            if self.mg and MINIGAMES[self.mg].get("goal"):
+                parts.append(MINIGAMES[self.mg]["goal"])
+            c.create_text(w / 2, 72, text=" · ".join(parts),
+                          font=(self.app.font_ui, 9), fill=DIM)
         if not self.low:
             for i, it in enumerate(getattr(self, "_slider_shimmer", [])):
                 x0 = 12 + i * (seg_w + 10)
                 off = (self.tick_count * 3) % (seg_w + 24) - 12
                 c.coords(it, x0 + off, y0 + 3, x0 + off + 10, y1 - 3)
                 c.itemconfig(it, state="normal")
-        bright = DIFF_SLIDER[key][0]
-        c.create_text(w / 2, 36,
-                      text=f"СЛОЖНОСТЬ: {DIFFICULTIES[key]['label']}",
-                      font=(self.app.font_title, 11, "bold"), fill=bright)
-        c.create_text(w / 2, 55,
-                      text=f"◎ ×{self.cfg['reward']:g}    ⭐ ×{self.cfg['exp_reward']:g}",
-                      font=(self.app.font_ui, 10, "bold"), fill=GOLD)
-        parts = ["проходимые границы" if self.cfg["wrap"]
-                 else "смертельные стены"]
-        if self.cfg.get("obstacles"):
-            parts.append(f"препятствия: {self.cfg['obstacles']}")
-        if self.cfg.get("poison"):
-            parts.append("ядовитые фрукты")
-        if self.cfg.get("time"):
-            parts.append(f"таймер {self.cfg['time']} с")
-        if self.mg and MINIGAMES[self.mg].get("goal"):
-            parts.append(MINIGAMES[self.mg]["goal"])
-        c.create_text(w / 2, 72, text=" · ".join(parts),
-                      font=(self.app.font_ui, 9), fill=DIM)
 
     def _draw_foods(self, phase, simple):
         c = self.canvas

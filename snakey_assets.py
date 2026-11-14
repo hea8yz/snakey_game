@@ -563,6 +563,8 @@ class SoundManager:
     def __init__(self, save=None):
         self.save = save if save is not None else {}
         self._proc = deque()
+        self._sfx_aliases = deque()
+        self._sfx_n = 0
         self._music_proc = None
         self._music_thread = None
         self._music_watchdog = None
@@ -621,10 +623,15 @@ class SoundManager:
                 return
         try:
             if self._backend == "winsound":
-                w = self._winsound
-                w.PlaySound(str(path),
-                            w.SND_FILENAME | w.SND_ASYNC
-                            | w.SND_NODEFAULT)
+                # winsound.PlaySound ОДНОКАНАЛЬНЫЙ: каждый новый звук обрывает
+                # предыдущий — из-за этого звуки «ломались» при быстрых
+                # переключениях. Играем через MCI с уникальными alias —
+                # до 6 звуков одновременно (полифония).
+                if not self._mci_sfx(path):
+                    w = self._winsound
+                    w.PlaySound(str(path),
+                                w.SND_FILENAME | w.SND_ASYNC
+                                | w.SND_NODEFAULT)
             else:
                 self._prune()
                 proc = subprocess.Popen(
@@ -643,6 +650,45 @@ class SoundManager:
                 old.terminate()
             except Exception:
                 pass
+
+    # ---------- полифоничные SFX на Windows (MCI, alias на каждый звук) ----------
+    def _mci_sfx(self, path):
+        """Играет SFX через отдельный MCI-alias. Возвращает False, если MCI
+        недоступен (тогда вызывающий код откатывается на winsound)."""
+        if self._winmm is None and sys.platform != "win32":
+            return False
+        self._sfx_n += 1
+        alias = f"snakeysfx{self._sfx_n}"
+        code, _ = self._mci(f'open "{path}" type waveaudio alias {alias}')
+        if code != 0:
+            return False
+        self._sfx_aliases.append(alias)
+        # лимит полифонии: самые старые звуки закрываем (они уже отыграли)
+        while len(self._sfx_aliases) > 6:
+            old = self._sfx_aliases.popleft()
+            self._mci(f"close {old}")
+        self._mci(f"play {alias} from 0")
+        code, ln = self._mci(f"status {alias} length")
+        try:
+            ms = max(150, int(ln))
+        except (TypeError, ValueError):
+            ms = 800
+        threading.Thread(target=self._mci_sfx_reap, args=(alias, ms),
+                         daemon=True).start()
+        return True
+
+    def _mci_sfx_reap(self, alias, ms):
+        # уборщик: закрывает alias после окончания звука, освобождая канал
+        time.sleep(ms / 1000.0 + 0.15)
+        self._mci(f"close {alias}")
+        try:
+            self._sfx_aliases.remove(alias)
+        except ValueError:
+            pass
+
+    def _close_all_sfx(self):
+        while self._sfx_aliases:
+            self._mci(f"close {self._sfx_aliases.popleft()}")
 
     # ---------- музыка (Windows: MCI, цикл через watchdog) ----------
     def _mci(self, cmd):
@@ -787,6 +833,7 @@ class SoundManager:
     def _halt_playback(self):
         # остановить воспроизведение, но сохранить желание слушать музыку
         self._music_on = False
+        self._close_all_sfx()
         if self._winmm is not None:
             try:
                 self._winmm.mciSendStringW("stop snakeymusic", None, 0, 0)
