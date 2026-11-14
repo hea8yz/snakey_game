@@ -11,6 +11,7 @@ from snakey_minis import MiniScreen
 from snakey_save import load_save, save_save
 from snakey_settings import SettingsScreen
 from snakey_shop import ShopScreen
+from snakey_widgets import refocus_app
 
 import snakey_achievements as _achievements
 import snakey_assets as _assets
@@ -122,7 +123,8 @@ def _show_update_popup(app, new_version):
         tk.Label(win, text="Перезапустите игру, чтобы изменения вступили в силу.",
                  bg="#101820", fg="#cdd9e5",
                  font=(fam, 10)).pack(padx=26, pady=(0, 12))
-        tk.Button(win, text="OK", command=win.destroy,
+        tk.Button(win, text="OK",
+                  command=lambda: (win.destroy(), refocus_app(app)),
                   bg="#1f6feb", fg="#ffffff", activebackground="#388bfd",
                   activeforeground="#ffffff", relief="flat",
                   font=(fam, 10, "bold"),
@@ -130,8 +132,18 @@ def _show_update_popup(app, new_version):
         win.update_idletasks()
         w = max(win.winfo_reqwidth(), 300)
         h = win.winfo_reqheight()
-        win.geometry(f"{w}x{h}+{(app.winfo_screenwidth() - w) // 2}"
-                     f"+{(app.winfo_screenheight() - h) // 2}")
+        try:
+            px, py = app.winfo_rootx(), app.winfo_rooty()
+            pw, ph = app.winfo_width(), app.winfo_height()
+            if pw > 1 and ph > 1:
+                x = px + max(0, (pw - w) // 2)
+                y = py + max(0, (ph - h) // 2)
+            else:
+                raise ValueError
+        except Exception:
+            x = (app.winfo_screenwidth() - w) // 2
+            y = (app.winfo_screenheight() - h) // 2
+        win.geometry(f"{w}x{h}+{max(0, x)}+{max(0, y)}")
         win.lift()
         win.focus_force()
     except Exception:
@@ -193,25 +205,56 @@ class App(tk.Tk):
 
         self.container = tk.Frame(self, bg=BG)
         self.container.pack(fill="both", expand=True)
+        self.frame_classes = {cls.__name__: cls for cls in
+                              (MenuScreen, MiniScreen, AchScreen, ShopScreen,
+                               SettingsScreen, GameScreen)}
         self.frames = {}
-        for cls in (MenuScreen, MiniScreen, AchScreen, ShopScreen,
-                    SettingsScreen, GameScreen):
-            frame = cls(self.container, self)
-            self.frames[cls.__name__] = frame
-            frame.grid(row=0, column=0, sticky="nsew")
+        # быстрый запуск: при старте строим только меню, остальные экраны
+        # достраиваются в фоне сразу после открытия окна
+        self._make_frame("MenuScreen")
         self.container.grid_rowconfigure(0, weight=1)
         self.container.grid_columnconfigure(0, weight=1)
 
         self.bind("<KeyPress>", self._on_key)
+        # клик по главному окну всегда возвращает клавиатурный фокус —
+        # страховка от "мёртвого" управления
+        self.bind("<Button-1>", self._restore_focus, add="+")
+        self.after(400, self._focus_watch)
         self.bind_all("<MouseWheel>", self._on_wheel)
         self.bind_all("<Button-4>", self._on_wheel)
         self.bind_all("<Button-5>", self._on_wheel)
         self.show("MenuScreen")
+        self.after_idle(self._prebuild_rest)
         self.sound.start_music()
         start_autoupdate(self)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
+    def _make_frame(self, name):
+        frame = self.frames.get(name)
+        if frame is not None:
+            return frame
+        cls = self.frame_classes.get(name)
+        if cls is None:
+            return None
+        frame = cls(self.container, self)
+        self.frames[name] = frame
+        frame.grid(row=0, column=0, sticky="nsew")
+        return frame
+
+    def _prebuild_rest(self, i=0):
+        # достраиваем остальные экраны по одному с паузой — окно не фризит
+        order = ("MiniScreen", "SettingsScreen", "ShopScreen", "AchScreen",
+                 "GameScreen")
+        if i >= len(order):
+            return
+        try:
+            self._make_frame(order[i])
+            self.after(40, lambda: self._prebuild_rest(i + 1))
+        except Exception:
+            pass
+
     def show(self, name):
+        self._make_frame(name)
         self.current = name
         for name_, frame in self.frames.items():
             if name_ != name:
@@ -233,6 +276,28 @@ class App(tk.Tk):
         self.save["window_size"] = key
         self.commit()
         self._apply_size()
+
+    def _restore_focus(self, _event=None):
+        try:
+            self.focus_set()
+        except Exception:
+            pass
+
+    def _focus_watch(self):
+        # если попап унёс фокус и уничтожился, а курсор внутри игры —
+        # моментально возвращаем управление без перезапуска
+        try:
+            if self.winfo_exists() and self.focus_displayof() is None:
+                inside = self.winfo_containing(self.winfo_pointerx(),
+                                               self.winfo_pointery())
+                if inside is not None:
+                    self.focus_force()
+        except Exception:
+            pass
+        try:
+            self.after(400, self._focus_watch)
+        except Exception:
+            pass
 
     def _on_key(self, event):
         self.frames[self.current].on_key(event)

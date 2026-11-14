@@ -345,7 +345,8 @@ class MenuScreen(Screen):
                 tk.Label(win, text=f"\u2605  {line}", bg=PANEL, fg=TEXT,
                          font=(self.app.font_ui, 9, "bold")).pack(
                              pady=1, ipadx=10, ipady=2)
-        RoundButton(win, "\u041a\u0440\u0443\u0442\u043e!", win.destroy, width=150, height=40,
+        RoundButton(win, "\u041a\u0440\u0443\u0442\u043e!",
+                    lambda: (win.destroy(), self.refocus()), width=150, height=40,
                     bg=ACCENT, fg="#06220c", app_bg=BG,
                     font=(self.app.font_ui, 12, "bold")).pack(pady=14)
         self._center_window(win)
@@ -388,7 +389,8 @@ class MenuScreen(Screen):
         for name in pending[:5]:
             tk.Label(win, text=f"\u2605  {name}", bg=BG, fg=TEXT,
                      font=(self.app.font_ui, 10, "bold")).pack()
-        RoundButton(win, "\u041e\u0442\u043b\u0438\u0447\u043d\u043e!", win.destroy, width=150, height=40,
+        RoundButton(win, "\u041e\u0442\u043b\u0438\u0447\u043d\u043e!",
+                    lambda: (win.destroy(), self.refocus()), width=150, height=40,
                     bg="#8957e5", fg="#f4efff", app_bg=BG,
                     font=(self.app.font_ui, 12, "bold")).pack(pady=12)
         self._center_window(win)
@@ -451,7 +453,13 @@ class MenuScreen(Screen):
         win.transient(self.app)
 
         def close():
-            win.destroy()
+            # окно не уничтожается, а прячется: повторное открытие мгновенное,
+            # фокус не теряется вместе с уничтоженным окном
+            try:
+                win.withdraw()
+            except tk.TclError:
+                pass
+            self.refocus()
 
         self._borderless(win, "Update log \u2014 SNAKEY", 560, wbg, on_close=close)
         cv = tk.Canvas(win, width=560, height=88, bg=wbg, highlightthickness=0)
@@ -506,3 +514,7 @@ class MenuScreen(Screen):
                     app_bg=wbg, font=(self.app.font_ui, 10, "bold")).pack(pady=12)
         win.protocol("WM_DELETE_WINDOW", close)
         self._center_window(win)
+        # окно появляется ПОВЕРХ главного сразу, а не со второго клика
+        win.deiconify()
+        win.lift()
+        win.focus_force()

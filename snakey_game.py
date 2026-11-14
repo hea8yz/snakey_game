@@ -119,6 +119,11 @@ class GameScreen(MinigameMixin, Screen):
         self.foods = []
         self._seg_items = []
         self._shadow_items = []
+        self._seg_shown = []
+        self._seg_shshown = []
+        self._seg_cells = []
+        self._seg_scells = []
+        self._seg_fills = []
         self._fx_items = []
         self.paused = False
 
@@ -209,6 +214,11 @@ class GameScreen(MinigameMixin, Screen):
         self.foods = []
         self._seg_items = []
         self._shadow_items = []
+        self._seg_shown = []
+        self._seg_shshown = []
+        self._seg_cells = []
+        self._seg_scells = []
+        self._seg_fills = []
         self._fx_items = []
         self._seg_active = 0
         self._fx_active = 0
@@ -407,6 +417,10 @@ class GameScreen(MinigameMixin, Screen):
             elif key == "return":
                 self.new_game()
             return
+        if self.job is None and not self.paused:
+            # страховка: если игровой цикл остановился (потерянный after),
+            # любой ввод моментально его оживляет
+            self._schedule()
         moves = {
             "up": (-1, 0), "w": (-1, 0),
             "down": (1, 0), "s": (1, 0),
@@ -985,6 +999,11 @@ class GameScreen(MinigameMixin, Screen):
                          outline="#fff3c4", width=2)
         self._seg_items = []
         self._shadow_items = []
+        self._seg_shown = []
+        self._seg_shshown = []
+        self._seg_cells = []
+        self._seg_scells = []
+        self._seg_fills = []
         self._fx_items = []
         self._seg_active = 0
         self._fx_active = 0
@@ -1102,23 +1121,47 @@ class GameScreen(MinigameMixin, Screen):
                                    state="hidden")
             shadows.append(sh)
             pool.append(seg)
-        if self._seg_active > need:
-            for i in range(need, self._seg_active):
-                c.itemconfig(shadows[i], state="hidden")
-                c.itemconfig(pool[i], state="hidden")
+            self._seg_shown.append(False)
+            self._seg_shshown.append(False)
+            self._seg_cells.append(None)
+            self._seg_scells.append(None)
+            self._seg_fills.append(None)
+        shown = self._seg_shown
+        shshown = self._seg_shshown
+        cells = self._seg_cells
+        scells = self._seg_scells
+        fills = self._seg_fills
+        # тени со stipple очень дорогие: только у первых сегментов,
+        # у длинной змейки дальше они всё равно не читаются
+        shadow_need = 0 if self.low else min(need, 24)
+        for i in range(max(self._seg_active, need)):
+            want = i < need
+            if shown[i] != want:
+                c.itemconfig(pool[i], state="normal" if want else "hidden")
+                shown[i] = want
+            wsh = want and i < shadow_need
+            if shshown[i] != wsh:
+                c.itemconfig(shadows[i], state="normal" if wsh else "hidden")
+                shshown[i] = wsh
         for i in range(need):
-            sh, seg = shadows[i], pool[i]
             r, col = self.snake[i]
+            cell = (r, col)
+            if cells[i] != cell or (i < shadow_need and scells[i] != cell):
+                pad = 2 if i == 0 else 3
+                radius = 7 if i == 0 else 5
+                x1, y1 = col * CELL + pad, r * CELL + pad
+                x2, y2 = (col + 1) * CELL - pad, (r + 1) * CELL - pad
+                pts = round_pts(x1, y1, x2, y2, radius)
+                if cells[i] != cell:
+                    c.coords(pool[i], *pts)
+                    cells[i] = cell
+                if i < shadow_need and scells[i] != cell:
+                    c.coords(shadows[i], *(v + 4 for v in pts))
+                    scells[i] = cell
             color = seg_color(sel, i, need, self.tick_count)
-            pad = 2 if i == 0 else 3
-            radius = 7 if i == 0 else 5
-            x1, y1 = col * CELL + pad, r * CELL + pad
-            x2, y2 = (col + 1) * CELL - pad, (r + 1) * CELL - pad
-            if not self.low:
-                c.coords(sh, *round_pts(x1 + 4, y1 + 4, x2 + 4, y2 + 4, radius))
-                c.itemconfig(sh, state="normal")
-            c.coords(seg, *round_pts(x1, y1, x2, y2, radius))
-            c.itemconfig(seg, state="normal", fill=color)
+            if fills[i] != color:
+                c.itemconfig(pool[i], fill=color)
+                fills[i] = color
         self._seg_active = need
 
         hr, hc = self.snake[0]

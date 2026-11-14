@@ -93,6 +93,7 @@ class AchScreen(Screen):
         self.scroller.bind("<Configure>", self._on_resize)
         self._cards = []
         self._built = False
+        self._ach_queue = None
         RoundButton(self, "←  Назад", lambda: app.show("MenuScreen"),
                     width=170, height=40, app_bg=self.bot,
                     font=(app.font_ui, 11, "bold")).pack(pady=(6, 10))
@@ -139,7 +140,21 @@ class AchScreen(Screen):
         for w in self.inner.winfo_children():
             w.destroy()
         self._cards = []
-        for ach in ACHIEVEMENTS:
+        # 116 карточек строим порциями в фоне: вкладка открывается мгновенно
+        self._ach_queue = list(ACHIEVEMENTS)
+        self._ach_build_batch()
+
+    def _ach_build_batch(self, batch=16):
+        queue = self._ach_queue
+        if not queue:
+            self._ach_queue = None
+            return
+        for ach in queue[:batch]:
             card = AchCard(self.inner, self.app, ach, card_bg=self.mid)
             card.pack(fill="x", pady=3)
             self._cards.append(card)
+        del queue[:batch]
+        try:
+            self.after(1, self._ach_build_batch)
+        except Exception:
+            self._ach_queue = None
