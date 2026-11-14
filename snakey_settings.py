@@ -36,8 +36,10 @@ class VolumeSlider(tk.Canvas):
         super().__init__(master, width=width, height=height, bg=bg,
                          highlightthickness=0)
         self.on_change = on_change
-        self._w = width
-        self._h = height
+        # ВАЖНО: нельзя использовать имена _w/_h — это внутренние поля tkinter
+        # (Tcl-путь виджета). Перезапись _w ломала виджет: настройки не открывались.
+        self._sw = width
+        self._sh = height
         self.value = 100
         self.bind("<Button-1>", self._on_drag)
         self.bind("<B1-Motion>", self._on_drag)
@@ -49,7 +51,7 @@ class VolumeSlider(tk.Canvas):
 
     def _on_drag(self, event):
         pad = 8
-        usable = self._w - pad * 2 - 34  # справа место под подпись "N%"
+        usable = self._sw - pad * 2 - 34  # справа место под подпись "N%"
         frac = (event.x - pad) / max(1, usable)
         v = int(round(max(0.0, min(1.0, frac)) * 100))
         if v != self.value:
@@ -58,17 +60,17 @@ class VolumeSlider(tk.Canvas):
 
     def _draw(self):
         self.delete("all")
-        pad, h = 8, self._h
+        pad, h = 8, self._sh
         mid = h / 2
-        x2 = pad + (self._w - pad * 2 - 34) * self.value / 100.0
-        round_rect(self, pad, mid - 4, self._w - pad - 34, mid + 4, 4,
+        x2 = pad + (self._sw - pad * 2 - 34) * self.value / 100.0
+        round_rect(self, pad, mid - 4, self._sw - pad - 34, mid + 4, 4,
                    fill=PANEL, outline=BORDER)
         if self.value > 0:
             round_rect(self, pad, mid - 4, max(pad + 8, x2), mid + 4, 4,
                        fill=ACCENT, outline="")
         self.create_oval(x2 - 7, mid - 7, x2 + 7, mid + 7,
                          fill="#eafff0", outline=ACCENT)
-        self.create_text(self._w - pad, mid, anchor="e",
+        self.create_text(self._sw - pad, mid, anchor="e",
                          text=f"{self.value}%", fill=TEXT,
                          font=("Helvetica", 9, "bold"))
 

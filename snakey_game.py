@@ -245,6 +245,12 @@ class GameScreen(MinigameMixin, Screen):
         self.low = bool(self.app.save.get("low_spec", False))
         self._foods_dirty = True
         self._slider_dirty = True
+        # в mg6 большой таймер живёт в полотне ползунка — расширяем его вниз,
+        # чтобы таймер был ПОД блоком сложности, а не поверх текстов
+        try:
+            self.slider.configure(height=118 if self.mg == "mg6" else 86)
+        except Exception:
+            pass
         self._mg6_timer_items = []
         self._mg6_timer_val = None
         self._redraw_static()
@@ -567,7 +573,8 @@ class GameScreen(MinigameMixin, Screen):
                 px = eaten[1][1] * CELL + CELL / 2
                 py = eaten[1][0] * CELL + CELL / 2
                 self.popups.append([px, py - 10, "+5 ⚡", 10, GOLD])
-                if random.random() < 0.25:
+                # золотая еда сбрасывает разгон — шанс респавна снижен
+                if random.random() < 0.12:
                     self._spawn_food("golden")
             else:
                 info = FOOD_BY_ID[eaten[0]]
@@ -575,7 +582,12 @@ class GameScreen(MinigameMixin, Screen):
                 self.score += info["value"]
                 sfx("eat")
                 self.score_var.set(f"Счёт: {self.score}")
-                self.speed = max(self.cfg["min"], self.speed - self.cfg["step"])
+                # скорость меняется только там, где она вообще растёт от еды
+                # (step > 0). В mg5 step=0, а min=базовая скорость — старый код
+                # max(min, speed-step) СБРАСЫВАЛ разгон молнии любым яблоком.
+                if self.cfg["step"] > 0:
+                    self.speed = max(self.cfg["min"],
+                                     self.speed - self.cfg["step"])
                 px = eaten[1][1] * CELL + CELL / 2
                 py = eaten[1][0] * CELL + CELL / 2
                 self.popups.append([px, py - 10, f"+{info['value']}", 9, info["color"]])
