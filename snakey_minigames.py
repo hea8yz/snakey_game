@@ -102,7 +102,8 @@ class MinigameMixin:
         if self.pred_t < self.pred_ms:
             return True
         self.pred_t = 0.0
-        self.pred_ms = max(110.0, self.pred_ms - 1.5)
+        self.pred_ms = max(float(self.cfg.get("pred_floor", 110.0)),
+                           self.pred_ms - float(self.cfg.get("pred_accel", 1.5)))
         self._mg4_pred_step()
         if self.snake[0] in self.predator:
             self._end_game("ХИЩНИК ДОГНАЛ!")
@@ -253,20 +254,20 @@ class MinigameMixin:
     def _mg6_draw(self):
         c = self.canvas
         pool = self._tunnel_items
+        # пул живёт только пока канвас не очищен (_redraw_static пересоздаёт его),
+        # поэтому state="normal" достаточно выставить один раз при создании
         while len(pool) < 2 * COLS:
             pool.append(c.create_rectangle(-40, -40, -39, -39,
                                            fill="#39424c", outline="",
-                                           tags="tunnel", state="hidden"))
+                                           tags="tunnel"))
         for i in range(COLS):
             center, hw = self._mg6_seg(self.mg6_d + i)
             top = (center - hw) * CELL
             bot = (center + hw + 1) * CELL
             it = pool[2 * i]
             c.coords(it, i * CELL, 0, (i + 1) * CELL, top)
-            c.itemconfig(it, state="normal")
             it = pool[2 * i + 1]
             c.coords(it, i * CELL, bot, (i + 1) * CELL, ROWS * CELL)
-            c.itemconfig(it, state="normal")
 
     def _mg7_setup(self):
         self._spawn_food("apple")

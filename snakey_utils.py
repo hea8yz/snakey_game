@@ -52,6 +52,9 @@ def gradient_bands(c, x1, y1, x2, y2, c1, c2, steps=22, tags=""):
                            fill=col, outline="", tags=tags)
 def seg_color(sel, i, need, tick):
     if sel == "rainbow":
+        # квантование тика: цвет обновляется каждые 2 тика вместо каждого —
+        # вдвое меньше itemconfig на длинной змейке, для глаза неотличимо
+        tick -= tick % 2
         return hsv_hex((i * 14 + tick * 8) / 360, 0.85, 0.95)
     g = GRADIENTS.get(sel)
     if g:
