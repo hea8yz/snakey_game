@@ -53,6 +53,7 @@ class MiniScreen(Screen):
             lambda _e: self.scroller.configure(
                 scrollregion=self.scroller.bbox("all")))
         self._card_widgets = {}
+        self._built_level = -1
         RoundButton(self, "←  Назад", lambda: app.show("MenuScreen"),
                     width=170, height=40, app_bg=self.bot,
                     font=(app.font_ui, 11, "bold")).pack(pady=(6, 8))
@@ -70,8 +71,18 @@ class MiniScreen(Screen):
 
     def _rebuild(self, status="", reset_scroll=True):
         self.status_var.set(status or
-                            "Колесо мыши — прокрутка · сложность влияет "
-                            "на скорость и награды")
+                            "\u041a\u043e\u043b\u0435\u0441\u043e \u043c\u044b\u0448\u0438 \u2014 \u043f\u0440\u043e\u043a\u0440\u0443\u0442\u043a\u0430 \u00b7 \u0441\u043b\u043e\u0436\u043d\u043e\u0441\u0442\u044c \u0432\u043b\u0438\u044f\u0435\u0442 "
+                            "\u043d\u0430 \u0441\u043a\u043e\u0440\u043e\u0441\u0442\u044c \u0438 \u043d\u0430\u0433\u0440\u0430\u0434\u044b")
+        level = level_from_exp(self.app.save.get("exp", 0))
+        if self._card_widgets and self._built_level == level:
+            # \u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0438 \u0443\u0436\u0435 \u0441\u043e\u0437\u0434\u0430\u043d\u044b \u2014 \u0442\u043e\u043b\u044c\u043a\u043e \u043e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u0441\u0442\u0430\u0442\u044b \u0438 \u043a\u043d\u043e\u043f\u043a\u0438 \u0441\u043b\u043e\u0436\u043d\u043e\u0441\u0442\u0435\u0439:
+            # \u0432\u043a\u043b\u0430\u0434\u043a\u0430 \u043e\u0442\u043a\u0440\u044b\u0432\u0430\u0435\u0442\u0441\u044f \u043c\u0433\u043d\u043e\u0432\u0435\u043d\u043d\u043e, \u0431\u0435\u0437 \u043f\u0435\u0440\u0435\u0441\u043e\u0437\u0434\u0430\u043d\u0438\u044f \u0432\u0438\u0434\u0436\u0435\u0442\u043e\u0432
+            for mg_key in GAME_ORDER:
+                self._refresh_card_state(mg_key)
+            if reset_scroll:
+                self.scroller.yview_moveto(0)
+            return
+        self._built_level = level
         for w in self.card_holder.winfo_children():
             w.destroy()
         self._card_widgets = {}
@@ -79,6 +90,15 @@ class MiniScreen(Screen):
             self._card(mg_key)
         if reset_scroll:
             self.scroller.yview_moveto(0)
+
+    def _current_diff(self, mg_key):
+        level = level_from_exp(self.app.save.get("exp", 0))
+        current = self.app.save.get(f"{mg_key}_diff", "normal")
+        if current not in MINIGAMES[mg_key]["diffs"]:
+            current = "normal"
+        if MINIGAMES[mg_key]["diffs"][current]["level"] > level:
+            current = "normal"
+        return level, current
 
     def _card(self, mg_key):
         mg = MINIGAMES[mg_key]
@@ -113,37 +133,39 @@ class MiniScreen(Screen):
         stat = mg.get("stat")
         stat_line = (mg.get("stat_label", "{}").format(st.get(stat, 0))
                      if stat else "")
-        card.create_text(26, 92, text=stat_line, anchor="w",
-                         font=(self.app.font_ui, 11, "bold"), fill=GOLD)
-        level = level_from_exp(self.app.save.get("exp", 0))
-        current = self.app.save.get(f"{mg_key}_diff", "normal")
-        if current not in mg["diffs"]:
-            current = "normal"
-        if mg["diffs"][current]["level"] > level:
-            current = "normal"
+        card._stat_id = card.create_text(26, 92, text=stat_line, anchor="w",
+                                         font=(self.app.font_ui, 11, "bold"),
+                                         fill=GOLD)
+        level, current = self._current_diff(mg_key)
         row = tk.Frame(card, bg=PANEL)
-        card.create_window(26, 124, window=row, anchor="w")
+        card._row_win = card.create_window(26, 124, window=row, anchor="w")
+        card._row = row
+        card._diff_state = (level, current)
+        self._build_diff_buttons(card, mg_key, row, level, current)
+        play = RoundButton(card, "\u0418\u0413\u0420\u0410\u0422\u042c", lambda: self._play(mg_key),
+                           width=120, height=44, bg=BLUE, fg="#061224",
+                           app_bg=PANEL, font=(self.app.font_ui, 12, "bold"))
+        card.create_window(622, 96, window=play)
+
+    def _build_diff_buttons(self, card, mg_key, row, level, current):
+        mg = MINIGAMES[mg_key]
         for key in MG_DIFF_ORDER:
             dcfg = mg["diffs"][key]
             if dcfg["level"] > level:
-                btn = RoundButton(row, f"🔒 ур. {dcfg['level']}", width=118,
+                btn = RoundButton(row, f"\U0001f512 \u0443\u0440. {dcfg['level']}", width=118,
                                   height=32, bg=LOCKED_BG, fg=DIM,
                                   app_bg=PANEL,
                                   font=(self.app.font_ui, 9, "bold"))
             else:
                 selected = key == current
                 btn = RoundButton(
-                    row, f"{DIFFICULTIES[key]['label']} · ×{dcfg['reward']:g}",
+                    row, f"{DIFFICULTIES[key]['label']} \u00b7 \u00d7{dcfg['reward']:g}",
                     command=(lambda k=key, m=mg_key: self._set_diff(m, k)),
                     width=118, height=32,
                     bg=ACCENT_DARK if selected else "#1c2f4a",
                     fg="#c9ffd4" if selected else TEXT, app_bg=PANEL,
                     font=(self.app.font_ui, 9, "bold"))
             btn.pack(side="left", padx=3)
-        play = RoundButton(card, "ИГРАТЬ", lambda: self._play(mg_key),
-                           width=120, height=44, bg=BLUE, fg="#061224",
-                           app_bg=PANEL, font=(self.app.font_ui, 12, "bold"))
-        card.create_window(622, 96, window=play)
 
     def _set_diff(self, mg_key, key):
         if key not in MG_DIFF_ORDER or mg_key not in MINIGAMES:
@@ -157,13 +179,41 @@ class MiniScreen(Screen):
         self._refresh_card(mg_key)
 
     def _refresh_card(self, mg_key):
-        old_card = self._card_widgets.get(mg_key)
-        if old_card is not None:
-            try:
-                old_card.destroy()
-            except tk.TclError:
-                pass
-        self._card(mg_key)
+        # \u0442\u043e\u0447\u0435\u0447\u043d\u043e\u0435 \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435 \u043e\u0434\u043d\u043e\u0439 \u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0438 \u2014 \u0441\u043f\u0438\u0441\u043e\u043a \u043d\u0435 \u043f\u0435\u0440\u0435\u0441\u043e\u0437\u0434\u0430\u0451\u0442\u0441\u044f,
+        # \u043f\u0440\u043e\u043a\u0440\u0443\u0442\u043a\u0430 \u043d\u0435 \u0441\u0431\u0440\u0430\u0441\u044b\u0432\u0430\u0435\u0442\u0441\u044f
+        self._refresh_card_state(mg_key)
+
+    def _refresh_card_state(self, mg_key):
+        card = self._card_widgets.get(mg_key)
+        if card is None:
+            return
+        try:
+            card.winfo_exists()
+        except tk.TclError:
+            self._card_widgets.pop(mg_key, None)
+            return
+        mg = MINIGAMES[mg_key]
+        st = self._stats()
+        stat = mg.get("stat")
+        stat_line = (mg.get("stat_label", "{}").format(st.get(stat, 0))
+                     if stat else "")
+        try:
+            card.itemconfig(card._stat_id, text=stat_line)
+        except tk.TclError:
+            pass
+        level, current = self._current_diff(mg_key)
+        if getattr(card, "_diff_state", None) != (level, current):
+            row = getattr(card, "_row", None)
+            if row is not None:
+                try:
+                    row.destroy()
+                except tk.TclError:
+                    pass
+            row = tk.Frame(card, bg=PANEL)
+            card.itemconfig(card._row_win, window=row)
+            card._row = row
+            card._diff_state = (level, current)
+            self._build_diff_buttons(card, mg_key, row, level, current)
 
     def _set_mg_diff(self, key):
         self._set_diff("mg1", key)
