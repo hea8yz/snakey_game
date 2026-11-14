@@ -1,70 +1,83 @@
 @echo off
-chcp 65001 >nul
 setlocal EnableExtensions
 cd /d "%~dp0"
 title SNAKEY build
 
 echo ============================================
-echo   SNAKEY - сборка игры в SNAKEY.exe
+echo   SNAKEY - building SNAKEY.exe
 echo ============================================
 echo.
 
-rem --- 1. Проверяем Python ---
-where python >nul 2>nul
+rem --- 1. Check Python (real run, not just "where") ---
+python --version >nul 2>nul
 if errorlevel 1 (
-    echo [ОШИБКА] Python не найден.
-    echo Установи его с https://www.python.org/downloads/
-    echo и отметь галочку "Add python.exe to PATH" при установке.
+    echo [ERROR] Python not found or not working.
+    echo.
+    echo Install Python from https://www.python.org/downloads/
+    echo and CHECK the box "Add python.exe to PATH" during setup.
+    echo If you installed Python from Microsoft Store - uninstall it
+    echo and use the python.org installer instead.
+    echo.
     pause
     exit /b 1
 )
+for /f "tokens=*" %%v in ('python --version 2^>^&1') do echo [i] Found %%v
 
-rem --- 2. Проверяем/ставим PyInstaller ---
+rem --- 2. Check / install PyInstaller ---
 python -c "import PyInstaller" >nul 2>nul
 if errorlevel 1 (
-    echo [i] PyInstaller не найден, устанавливаю...
+    echo [i] PyInstaller not found, installing...
     python -m pip install --quiet pyinstaller
     if errorlevel 1 (
-        echo [ОШИБКА] Не удалось установить PyInstaller. Проверь интернет и повтори.
+        echo [ERROR] Failed to install PyInstaller. Check internet and try again.
+        echo.
         pause
         exit /b 1
     )
 )
 
-rem --- 3. Собираем exe ---
-echo [1/3] Собираю SNAKEY.exe...
+rem --- 3. Build the exe ---
+echo [1/3] Building SNAKEY.exe - this takes about a minute...
 set "ICON_ARG="
 if exist assets\snakey.ico set "ICON_ARG=--icon assets\snakey.ico"
 python -m PyInstaller --clean --noconfirm --onefile --windowed --name SNAKEY %ICON_ARG% snakey_main.py
 if errorlevel 1 (
-    echo [ОШИБКА] Сборка не удалась - смотри сообщения выше.
+    echo.
+    echo [ERROR] Build failed - see PyInstaller messages above.
+    echo.
     pause
     exit /b 1
 )
 
-rem --- 4. Кладём exe рядом с кодом и ресурсами ---
-echo [2/3] Копирую SNAKEY.exe в папку игры...
+rem --- 4. Move the exe next to the game files ---
+echo [2/3] Moving SNAKEY.exe into the game folder...
 move /y "dist\SNAKEY.exe" "SNAKEY.exe" >nul
 if errorlevel 1 (
-    echo [ОШИБКА] Не удалось переместить dist\SNAKEY.exe - возможно, игра запущена. Закрой SNAKEY.exe и запусти build.bat ещё раз.
+    echo [ERROR] Could not move dist\SNAKEY.exe into the game folder.
+    echo Most likely the game is running right now - close SNAKEY.exe and run build.bat again.
+    echo.
     pause
     exit /b 1
 )
 
-rem --- 5. Чистим временные папки сборки ---
-echo [3/3] Чищу временные файлы сборки...
+rem --- 5. Clean up temporary build files ---
+echo [3/3] Cleaning temporary build files...
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
 if exist SNAKEY.spec del /q SNAKEY.spec
 
 echo.
-echo ============================================
-echo   Готово! SNAKEY.exe лежит в папке игры.
-echo.
-echo   Папка assets\ должна остаться рядом с exe:
-echo   звуки, иконка и VERSION читаются из неё,
-echo   поэтому звуки/музыку можно менять и без
-echo   пересборки - просто подмени файлы.
-echo ============================================
+if exist SNAKEY.exe (
+    echo ============================================
+    echo   SUCCESS! SNAKEY.exe is in the game folder,
+    echo   next to snakey_main.py and assets\.
+    echo.
+    echo   Keep the assets\ folder next to the exe:
+    echo   sounds, icon and VERSION are read from it.
+    echo ============================================
+) else (
+    echo [WARNING] exe was built but not found in the folder.
+    echo Check your antivirus - it may have quarantined SNAKEY.exe.
+)
 echo.
 pause
