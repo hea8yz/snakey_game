@@ -52,6 +52,9 @@ class MenuScreen(Screen):
         self._btn_ids = {}
         self._btn_cmds = {}
         self._btn_grad = {}   # key -> (ids, x1, y1, x2, y2, r, c1, c2)
+        self._btn_glow = {}   # key -> последний применённый квантованный glow (перф)
+        self._title_glow = {} # i -> последний применённый квантованный glow буквы (перф)
+        self._badge_c = (0.0, 0.0)  # центр бейджа уровня — без чтения coords каждый кадр
         self._hover_t = {}    # key -> 0..1 (анимация наведения)
         self._hover_job = {}
         self._title_letters = []
@@ -176,6 +179,8 @@ class MenuScreen(Screen):
         self._btn_ids = {}
         self._btn_cmds = {}
         self._btn_grad = {}
+        self._btn_glow = {}
+        self._title_glow = {}
         self._hover_t = {}
         self._title_letters = []
         self._title_snake = []
@@ -286,13 +291,17 @@ class MenuScreen(Screen):
         t = self.anim_t
         w, h = self._geom()
         cy = h * 0.16
+        # перф: цвет буквы квантуется (шаг 0.02) — itemconfig только когда он реально сменился
         for sh, main, i in self._title_letters:
             glow = 0.15 + 0.75 * (0.5 + 0.5 * math.sin(t * 0.12 - i * 0.7))
             x = w / 2 - 110 + i * 44
             y = cy + math.sin(t * 0.08 + i * 0.6) * 3
             self.bg.coords(sh, x + 3, y + 3)
             self.bg.coords(main, x, y)
-            self.bg.itemconfig(main, fill=blend(ACCENT, ACCENT_BRIGHT, glow))
+            gq = round(glow, 2)
+            if gq != self._title_glow.get(i):
+                self._title_glow[i] = gq
+                self.bg.itemconfig(main, fill=blend(ACCENT, ACCENT_BRIGHT, gq))
         for iid, i, r in self._title_snake:
             x = w / 2 - 132 + i * 18
             y = cy + 76 + math.sin(t * 0.15 + i * 0.5) * 4
@@ -330,6 +339,7 @@ class MenuScreen(Screen):
         # бейдж уровня: кольцо + градиент, кольцо пульсирует (анимация)
         br = 22
         bcx, bcy = bx0 + 34, (by + by1) / 2
+        self._badge_c = (bcx, bcy)
         self._badge_ring = self.bg.create_oval(
             bcx - br - 4, bcy - br - 4, bcx + br + 4, bcy + br + 4,
             outline=ACCENT, width=2, tags=("menu", "level"))
@@ -526,13 +536,13 @@ class MenuScreen(Screen):
         # пульс кольца бейджа уровня
         ring = self._badge_ring
         if ring:
+            # перф: центр бейджа хранится заранее — никакого чтения coords из Tcl каждый кадр
+            cx, cy = self._badge_c
+            br = 26 + math.sin(t * 0.11) * 2.0
             try:
-                x1, y1, x2, y2 = self.bg.coords(ring)
+                self.bg.coords(ring, cx - br, cy - br, cx + br, cy + br)
             except (tk.TclError, ValueError):
                 return
-            cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-            br = 26 + math.sin(t * 0.11) * 2.0
-            self.bg.coords(ring, cx - br, cy - br, cx + br, cy + br)
         # искры вокруг панельки уровня (орбита вокруг базовой точки)
         for iid, bx, byy, k in self._sparkles:
             a = math.radians(k * 60 + t * 2)
@@ -548,14 +558,19 @@ class MenuScreen(Screen):
         self.anim_t += 1
         self._anim_title()
         self._anim_level()
-        # 1.1: «дыхание» градиентных кнопок — лёгкая волна яркости по очереди
+        # 1.1: «дыхание» градиентных кнопок — лёгкая волна яркости по очереди.
+        # перф: glow квантуется (шаг 0.02) и repaint запускается только когда он сменился
         for i, (key, grad) in enumerate(list(self._btn_grad.items())):
             ids, x1, y1, x2, y2, r, c1, c2 = grad
             glow = 0.05 + 0.05 * math.sin(self.anim_t * 0.09 - i * 0.9)
+            gq = round(glow, 2)
+            if gq == self._btn_glow.get(key):
+                continue
+            self._btn_glow[key] = gq
             try:
                 repaint_gradient(self.bg, ids, x1, y1, x2, y2, r,
-                                 blend(c1, "#ffffff", glow),
-                                 blend(c2, "#ffffff", glow))
+                                 blend(c1, "#ffffff", gq),
+                                 blend(c2, "#ffffff", gq))
             except tk.TclError:
                 continue
         # noinspection PyArgumentList

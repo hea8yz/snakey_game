@@ -137,8 +137,10 @@ class GameScreen(MinigameMixin, Screen):
         self._head_items = []
         self._tongue_shown = False
         self._ring_col = None
+        self._head_shown = False
         self._mgind_items = []
         self._dark_dirty = True
+        self._shimmer_shown = False
         # --- субтики: плавное движение между тиками ---
         # _prev_snake - снимок позиций сегментов ДО последнего хода (клетки или
         # дробные "виртуальные" позиции после раннего поворота), _prog - прогресс
@@ -1176,8 +1178,10 @@ class GameScreen(MinigameMixin, Screen):
         self._head_items = []
         self._tongue_shown = False
         self._ring_col = None
+        self._head_shown = False
         self._mgind_items = []
         self._dark_dirty = True
+        self._shimmer_shown = False
 
     def _draw_slider(self):
         c = self.slider
@@ -1191,6 +1195,7 @@ class GameScreen(MinigameMixin, Screen):
             # дальше каждый тик двигается только полоска-блик
             self._slider_dirty = False
             self._mg6_timer_items = []
+            self._shimmer_shown = False
             c.delete("all")
             self._slider_shimmer = []
             for i, dk in enumerate(MG_DIFF_ORDER):
@@ -1230,11 +1235,16 @@ class GameScreen(MinigameMixin, Screen):
             c.create_text(w / 2, 72, text=" · ".join(parts),
                           font=(self.app.font_ui, 9), fill=DIM)
         if not self.low:
-            for i, it in enumerate(getattr(self, "_slider_shimmer", [])):
+            sh_items = getattr(self, "_slider_shimmer", [])
+            if sh_items and not self._shimmer_shown:
+                # перф: state переключается один раз, дальше каждый кадр только coords
+                for it in sh_items:
+                    c.itemconfig(it, state="normal")
+                self._shimmer_shown = True
+            for i, it in enumerate(sh_items):
                 x0 = 12 + i * (seg_w + 10)
                 off = (self.tick_count * 3) % (seg_w + 24) - 12
                 c.coords(it, x0 + off, y0 + 3, x0 + off + 10, y1 - 3)
-                c.itemconfig(it, state="normal")
 
     def _draw_foods(self, phase, simple):
         c = self.canvas
@@ -1380,7 +1390,10 @@ class GameScreen(MinigameMixin, Screen):
             c.itemconfig(hi[0], outline=ring)
             self._ring_col = ring
         c.coords(hi[0], hc * CELL, hr * CELL, (hc + 1) * CELL, (hr + 1) * CELL)
-        c.itemconfig(hi[0], state="normal")
+        if not self._head_shown:
+            # перф: state переключается один раз, а не каждый кадр
+            c.itemconfig(hi[0], state="normal")
+            self._head_shown = True
         dx, dy = self.direction[1], self.direction[0]
         px, py = -dy, dx
         show_tongue = not self.game_over and self.tick_count % 9 < 3
@@ -1412,12 +1425,16 @@ class GameScreen(MinigameMixin, Screen):
         if self._fx_active > nfx:
             for i in range(nfx, self._fx_active):
                 c.itemconfig(fxp[i], state="hidden")
+        prev_active = self._fx_active
         for i, (x, y, vx, vy, life, color) in enumerate(self.particles):
             rad = max(1.0, life * 0.45)
             it = fxp[i]
             c.coords(it, int(x - rad), int(y - rad),
                      int(x + rad), int(y + rad))
-            c.itemconfig(it, state="normal", fill=color)
+            c.itemconfig(it, fill=color)
+            if i >= prev_active:
+                # перф: state — только для частиц, ставших видимыми в этом кадре
+                c.itemconfig(it, state="normal")
         self._fx_active = nfx
         for x, y, text_, life, color in self.popups:
             c.create_text(x, y, text=text_, font=(self.app.font_ui, 11, "bold"),

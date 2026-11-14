@@ -223,6 +223,7 @@ class GradientButton(tk.Canvas):
         self.sticker_color = sticker_color
         self.disabled = command is None
         self._t = 0.0
+        self._last_qt = None
         self._anim_job = None
         self.bind("<ButtonPress-1>", self._press)
         self.bind("<ButtonRelease-1>", self._release)
@@ -247,6 +248,9 @@ class GradientButton(tk.Canvas):
 
     def _paint(self):
         self.delete("all")
+        # перф: запоминаем квантованный t — повторные _paint с тем же состоянием
+        # (например дублирующие шаги анимации) отрисовываются заново только при смене
+        self._last_qt = round(self._t, 2)
         self._ids = []
         x1, y1, x2, y2, t = self._geom()
         r = self.radius
@@ -296,7 +300,9 @@ class GradientButton(tk.Canvas):
                 self._paint()
                 return
             self._t += d * 0.45
-            self._paint()
+            # перф: перекраска только когда квантованный t реально сменился
+            if round(self._t, 2) != self._last_qt:
+                self._paint()
             self._anim_job = self.after(28, step)
 
         step()
@@ -326,6 +332,7 @@ class GradientBG(tk.Canvas):
         self.phase = 0.0
         self.job = None
         self.bands = []
+        self._last_cols = []
         bh = 2004 / steps
         for i in range(steps):
             self.bands.append(self.create_rectangle(-4, i * bh - 2, 2004,
@@ -335,13 +342,20 @@ class GradientBG(tk.Canvas):
 
     def _paint_bands(self):
         n = max(1, self.steps - 1)
+        # перф: цвет квантуется и сравнивается с последним применённым —
+        # itemconfig вызывается только для полос, чей цвет реально сменился
+        last = getattr(self, "_last_cols", None)
+        if last is None or len(last) != len(self.bands):
+            last = self._last_cols = [None] * len(self.bands)
         for i, item in enumerate(self.bands):
             t = i / n
             col = blend(self.g1, self.g2, t)
-            wave = math.sin(self.phase + t * 4.0) * 0.05
+            wave = round(math.sin(self.phase + t * 4.0) * 0.05, 2)
             if wave > 0:
                 col = blend(col, self.accent, wave)
-            self.itemconfig(item, fill=col)
+            if col != last[i]:
+                self.itemconfig(item, fill=col)
+                last[i] = col
 
     def set_animated(self, on):
         if on and self.job is None:

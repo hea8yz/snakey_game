@@ -69,6 +69,7 @@ class ShopCard(tk.Canvas):
         self.clickable = False
         self.gridded = True
         self.tip = None
+        self._paint_key = None
         self.bind("<Button-1>", self._click)
         if not mini:
             self.bind("<Motion>", self._motion)
@@ -131,11 +132,17 @@ class ShopCard(tk.Canvas):
                       scale=1.7 if not self.mini else 1.0)
 
     def _paint(self):
-        c = self
-        c.delete("all")
+        # перф: карточка перерисовывается только когда её состояние (куплено/выбрано/
+        # заблокировано) реально сменилось — открытие вкладки без покупок почти бесплатно
         level = level_from_exp(self.app.save.get("exp", 0))
         owned, selected = self._state()
         locked = not owned and self.item.get("level", 1) > level
+        key = (owned, selected, locked)
+        if key == getattr(self, "_paint_key", None):
+            return
+        self._paint_key = key
+        c = self
+        c.delete("all")
         iid = self.item["id"]
         if self.mini:
             w, h = 118, 96

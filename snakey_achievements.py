@@ -39,6 +39,7 @@ class AchCard(tk.Canvas):
         self.app = app
         self.ach = ach
         self.screen = screen
+        self._paint_key = None
         self._phase = 0.0
         self.bind("<Button-1>", self._click)
         self._paint()
@@ -56,10 +57,17 @@ class AchCard(tk.Canvas):
         ach = self.ach
         if phase is not None:
             self._phase = phase
-        c.delete("all")
+        # перф: карточка перерисовывается только когда состояние или прогресс
+        # реально сменились (пульсация claim-карточек идёт через phase и не кэшируется)
         st = self.state()
         val = ach_value(ach, self.app.save)
         goal = ach["goal"]
+        if phase is None:
+            key = (st, round(min(val, goal) / max(1, goal), 2))
+            if key == getattr(self, "_paint_key", None):
+                return
+            self._paint_key = key
+        c.delete("all")
         frac = max(0.0, min(1.0, val / goal))
         W, H = _CARD_W, _CARD_H
         pulse = 0.5 + 0.5 * math.sin(self._phase * 2.4)
