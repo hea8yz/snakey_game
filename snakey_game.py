@@ -1,5 +1,6 @@
 import math
 import random
+import time
 import tkinter as tk
 
 
@@ -136,8 +137,26 @@ class GameScreen(MinigameMixin, Screen):
         self._head_items = []
         self._tongue_shown = False
         self._ring_col = None
+        self._head_shown = False
         self._mgind_items = []
         self._dark_dirty = True
+        self._shimmer_shown = False
+        # --- субтики: плавное движение между тиками ---
+        # _prev_snake - снимок позиций сегментов ДО последнего хода (клетки или
+        # дробные "виртуальные" позиции после раннего поворота), _prog - прогресс
+        # текущего интервала 0..1 (координата змейки x.pp), _tick_start - время
+        # последнего тика. _turn_early - параллельный _dir_queue флаг "нажатие
+        # случилось в первой половине клетки => поворот исполняется ранним тиком
+        # на субтике x.50"; при нажатии позже - поворот на границе следующей
+        # клетки (x+1), обычным тиком.
+        self._prev_snake = []
+        self._prog = 0.0
+        self._tick_start = 0.0
+        self._turn_early = []
+        self._virtual_prev = None
+        self._render_job = None
+        self._early_job = None
+        self._pts_cache = {}
 
     def on_show(self):
         self._cancel()
@@ -150,6 +169,76 @@ class GameScreen(MinigameMixin, Screen):
         if self.job is not None:
             self.after_cancel(self.job)
             self.job = None
+        if self._render_job is not None:
+            self.after_cancel(self._render_job)
+            self._render_job = None
+        if self._early_job is not None:
+            self.after_cancel(self._early_job)
+            self._early_job = None
+
+    def _start_render(self):
+        if self._render_job is None and not self.game_over and not self.paused:
+            self._render_job = self.after(30, self._render_loop)
+
+    def _render_loop(self):
+        """Кадры между тиками: обновляет _prog (субтик-координату x.pp),
+        рисует интерполированное движение и исполняет ранний поворот."""
+        self._render_job = None
+        if self.game_over or self.paused or self.job is None:
+            return
+        p = (time.monotonic() - self._tick_start) * 1000.0 / max(1, self.speed)
+        if self._dir_queue and self._turn_early and self._turn_early[0]:
+            if p >= 0.5:
+                self._fire_early()
+                return
+            if self._early_job is None:
+                # точный таймер на субтик x.50
+                self._early_job = self.after(
+                    max(1, int((0.5 - p) * self.speed)), self._fire_early)
+        self._prog = min(1.0, p)
+        if not self.low:
+            self._draw()
+        self._start_render()
+
+    def _fire_early(self):
+        """Ранний тик: нажатие в первой половине клетки (координата < x.50)
+        исполняет поворот на субтике x.50, срезая угол плавно и без рывка."""
+        self._early_job = None
+        if (self.game_over or self.paused or self.job is None
+                or not self._dir_queue or not self._turn_early
+                or not self._turn_early[0]):
+            return
+        self._cancel()
+        p = min(1.0, (time.monotonic() - self._tick_start) * 1000.0
+                / max(1, self.speed))
+        # виртуальные позиции на момент поворота - чтобы рендер продолжился
+        # ровно с того места, где змейка была видна (без скачка)
+        self._virtual_prev = self._virtual_positions(p)
+        self._tick()
+        self._start_render()
+
+    def _virtual_positions(self, p):
+        prev = self._prev_snake
+        out = []
+        for i, cell in enumerate(self.snake):
+            if i < len(prev):
+                pr, pc = prev[i]
+                if abs(pr - cell[0]) <= 1 and abs(pc - cell[1]) <= 1:
+                    out.append((pr + (cell[0] - pr) * p,
+                                pc + (cell[1] - pc) * p))
+                    continue
+            out.append((float(cell[0]), float(cell[1])))
+        return out
+
+    def _head_pos(self):
+        """Интерполированная (дробная) позиция головы для отрисовки."""
+        prev = self._prev_snake
+        if prev and self._prog < 1.0:
+            pr, pc = prev[0]
+            r, c = self.snake[0]
+            if abs(pr - r) <= 1 and abs(pc - c) <= 1:
+                return (pr + (r - pr) * self._prog, pc + (c - pc) * self._prog)
+        return (float(self.snake[0][0]), float(self.snake[0][1]))
 
     def new_game(self, mode=None):
         if mode is None:
@@ -204,6 +293,8 @@ class GameScreen(MinigameMixin, Screen):
         self.base_hue = 0.0
         self.fruit_colors = {}
         self._dir_queue = []
+        self._turn_early = []
+        self._virtual_prev = None
         self._food_born = {}
         self.mg8_build = False
         t = cfg.get("time", 0)
@@ -212,6 +303,9 @@ class GameScreen(MinigameMixin, Screen):
 
         mid_y = ROWS // 2
         self.snake = [(mid_y, COLS // 2), (mid_y, COLS // 2 - 1), (mid_y, COLS // 2 - 2)]
+        self._prev_snake = list(self.snake)
+        self._prog = 0.0
+        self._pts_cache = {}
         self.direction = (0, 1)
         self.next_direction = self.direction
         self.score = 0
@@ -269,9 +363,11 @@ class GameScreen(MinigameMixin, Screen):
         self._redraw_static()
         self._draw()
         self._schedule()
+        self._start_render()
 
     def _schedule(self):
         self._cancel()
+        self._tick_start = time.monotonic()
         # noinspection PyArgumentList
         self.job = self.after(self.speed, self._tick)
 
@@ -411,6 +507,10 @@ class GameScreen(MinigameMixin, Screen):
         mid_y = ROWS // 2
         self.snake = [(mid_y, COLS // 2), (mid_y, COLS // 2 - 1),
                       (mid_y, COLS // 2 - 2)]
+        self._prev_snake = list(self.snake)
+        self._prog = 0.0
+        self._turn_early = []
+        self._virtual_prev = None
         self.direction = (0, 1)
         self.next_direction = self.direction
         self.carrying = None
@@ -448,6 +548,7 @@ class GameScreen(MinigameMixin, Screen):
             # страховка: если игровой цикл остановился (потерянный after),
             # любой ввод моментально его оживляет
             self._schedule()
+            self._start_render()
         moves = {
             "up": (-1, 0), "w": (-1, 0),
             "down": (1, 0), "s": (1, 0),
@@ -471,6 +572,10 @@ class GameScreen(MinigameMixin, Screen):
                 self._cancel()
             else:
                 self._schedule()
+                # продолжаем ровно с той субтик-фазы, на которой поставили паузу
+                self._tick_start = (time.monotonic()
+                                    - self._prog * self.speed / 1000.0)
+                self._start_render()
             self._draw()
 
     def _queue_dir(self, dr, dc):
@@ -482,6 +587,9 @@ class GameScreen(MinigameMixin, Screen):
             return
         if len(self._dir_queue) < 2:
             self._dir_queue.append((dr, dc))
+            # субтики: нажатие при координате < x.50 - ранний поворот на субтике
+            # x.50; позже - поворот на границе следующей клетки (x+1)
+            self._turn_early.append(self._prog < 0.5)
 
     def _tick(self):
         """Обёртка: любая ошибка не останавливает игровой цикл."""
@@ -499,6 +607,11 @@ class GameScreen(MinigameMixin, Screen):
     def _tick_inner(self):
         if self.paused or self.game_over:
             return
+        vp = self._virtual_prev
+        self._virtual_prev = None
+        # снимок позиций ДО хода - по нему субтики интерполируют движение
+        self._prev_snake = vp if vp is not None else list(self.snake)
+        self._prog = 0.0
         self.tick_count += 1
         if self.cfg.get("time"):
             self.time_left -= self.speed / 1000
@@ -525,6 +638,8 @@ class GameScreen(MinigameMixin, Screen):
 
         if self._dir_queue:
             nd = self._dir_queue.pop(0)
+            if self._turn_early:
+                self._turn_early.pop(0)
             if (self.mg == "mg6"
                     or nd != (-self.direction[0], -self.direction[1])):
                 self.next_direction = nd
@@ -701,6 +816,10 @@ class GameScreen(MinigameMixin, Screen):
         mid_y = ROWS // 2
         self.snake = [(mid_y, COLS // 2), (mid_y, COLS // 2 - 1),
                       (mid_y, COLS // 2 - 2)]
+        self._prev_snake = list(self.snake)
+        self._prog = 0.0
+        self._turn_early = []
+        self._virtual_prev = None
         self.direction = (0, 1)
         self.next_direction = self.direction
         self.game_over = False
@@ -1059,8 +1178,10 @@ class GameScreen(MinigameMixin, Screen):
         self._head_items = []
         self._tongue_shown = False
         self._ring_col = None
+        self._head_shown = False
         self._mgind_items = []
         self._dark_dirty = True
+        self._shimmer_shown = False
 
     def _draw_slider(self):
         c = self.slider
@@ -1074,6 +1195,7 @@ class GameScreen(MinigameMixin, Screen):
             # дальше каждый тик двигается только полоска-блик
             self._slider_dirty = False
             self._mg6_timer_items = []
+            self._shimmer_shown = False
             c.delete("all")
             self._slider_shimmer = []
             for i, dk in enumerate(MG_DIFF_ORDER):
@@ -1113,11 +1235,16 @@ class GameScreen(MinigameMixin, Screen):
             c.create_text(w / 2, 72, text=" · ".join(parts),
                           font=(self.app.font_ui, 9), fill=DIM)
         if not self.low:
-            for i, it in enumerate(getattr(self, "_slider_shimmer", [])):
+            sh_items = getattr(self, "_slider_shimmer", [])
+            if sh_items and not self._shimmer_shown:
+                # перф: state переключается один раз, дальше каждый кадр только coords
+                for it in sh_items:
+                    c.itemconfig(it, state="normal")
+                self._shimmer_shown = True
+            for i, it in enumerate(sh_items):
                 x0 = 12 + i * (seg_w + 10)
                 off = (self.tick_count * 3) % (seg_w + 24) - 12
                 c.coords(it, x0 + off, y0 + 3, x0 + off + 10, y1 - 3)
-                c.itemconfig(it, state="normal")
 
     def _draw_foods(self, phase, simple):
         c = self.canvas
@@ -1196,28 +1323,49 @@ class GameScreen(MinigameMixin, Screen):
             if shshown[i] != wsh:
                 c.itemconfig(shadows[i], state="normal" if wsh else "hidden")
                 shshown[i] = wsh
+        # субтики: каждый кадр сегменты рисуются между prev и текущей клеткой
+        # (lerp по _prog). Позиция квантуется (20 шагов у головы, 5 дальше) и
+        # полигоны берутся из кэша - round_pts не пересчитывается на каждый кадр
+        prev = self._prev_snake
+        prog = self._prog
+        pts_cache = self._pts_cache
         for i in range(need):
             r, col = self.snake[i]
-            cell = (r, col)
-            if cells[i] != cell or (i < shadow_need and scells[i] != cell):
-                pad = 2 if i == 0 else 3
-                radius = 7 if i == 0 else 5
-                x1, y1 = col * CELL + pad, r * CELL + pad
-                x2, y2 = (col + 1) * CELL - pad, (r + 1) * CELL - pad
-                pts = round_pts(x1, y1, x2, y2, radius)
-                if cells[i] != cell:
-                    c.coords(pool[i], *pts)
-                    cells[i] = cell
-                if i < shadow_need and scells[i] != cell:
+            if i < len(prev) and prog > 0.0:
+                pr, pc = prev[i]
+                if abs(pr - r) <= 1 and abs(pc - col) <= 1:
+                    rf = pr + (r - pr) * prog
+                    cf = pc + (col - pc) * prog
+                else:
+                    rf, cf = float(r), float(col)  # wrap/телепорт - без lerp
+            else:
+                rf, cf = float(r), float(col)
+            pad = 2 if i == 0 else 3
+            q = 20.0 if i < 30 else 5.0
+            qr = round(rf * q) / q
+            qc = round(cf * q) / q
+            key = (qr, qc, pad)
+            if cells[i] != key:
+                pts = pts_cache.get(key)
+                if pts is None:
+                    x1, y1 = qc * CELL + pad, qr * CELL + pad
+                    x2, y2 = (qc + 1) * CELL - pad, (qr + 1) * CELL - pad
+                    pts = round_pts(x1, y1, x2, y2, 7 if i == 0 else 5)
+                    if len(pts_cache) > 8192:
+                        pts_cache.clear()
+                    pts_cache[key] = pts
+                c.coords(pool[i], *pts)
+                cells[i] = key
+                if i < shadow_need and scells[i] != key:
                     c.coords(shadows[i], *(v + 4 for v in pts))
-                    scells[i] = cell
+                    scells[i] = key
             color = seg_color(sel, i, need, self.tick_count)
             if fills[i] != color:
                 c.itemconfig(pool[i], fill=color)
                 fills[i] = color
         self._seg_active = need
 
-        hr, hc = self.snake[0]
+        hr, hc = self._head_pos()
         cx, cy = hc * CELL + CELL / 2, hr * CELL + CELL / 2
         ring = (blend(GRADIENTS[sel][1], "#ffffff", 0.3) if sel in GRADIENTS
                 else hsv_hex((self.tick_count * 8) / 360, 0.85, 0.95)
@@ -1242,7 +1390,10 @@ class GameScreen(MinigameMixin, Screen):
             c.itemconfig(hi[0], outline=ring)
             self._ring_col = ring
         c.coords(hi[0], hc * CELL, hr * CELL, (hc + 1) * CELL, (hr + 1) * CELL)
-        c.itemconfig(hi[0], state="normal")
+        if not self._head_shown:
+            # перф: state переключается один раз, а не каждый кадр
+            c.itemconfig(hi[0], state="normal")
+            self._head_shown = True
         dx, dy = self.direction[1], self.direction[0]
         px, py = -dy, dx
         show_tongue = not self.game_over and self.tick_count % 9 < 3
@@ -1274,12 +1425,16 @@ class GameScreen(MinigameMixin, Screen):
         if self._fx_active > nfx:
             for i in range(nfx, self._fx_active):
                 c.itemconfig(fxp[i], state="hidden")
+        prev_active = self._fx_active
         for i, (x, y, vx, vy, life, color) in enumerate(self.particles):
             rad = max(1.0, life * 0.45)
             it = fxp[i]
             c.coords(it, int(x - rad), int(y - rad),
                      int(x + rad), int(y + rad))
-            c.itemconfig(it, state="normal", fill=color)
+            c.itemconfig(it, fill=color)
+            if i >= prev_active:
+                # перф: state — только для частиц, ставших видимыми в этом кадре
+                c.itemconfig(it, state="normal")
         self._fx_active = nfx
         for x, y, text_, life, color in self.popups:
             c.create_text(x, y, text=text_, font=(self.app.font_ui, 11, "bold"),

@@ -11,7 +11,6 @@ from snakey_content import (
     ACCENT_DARK,
     ACCESSORIES,
     BG,
-    BLUE,
     BORDER,
     CHANGELOG,
     DIFFICULTIES,
@@ -26,23 +25,46 @@ from snakey_content import (
 )
 from snakey_save import exp_for_level, level_from_exp
 from snakey_utils import blend, gradient_bands, round_rect
-from snakey_widgets import GradientBG, RoundButton, Screen
+from snakey_widgets import (GradientBG, RoundButton, Screen,
+                            gradient_round_btn, repaint_gradient)
+
+# 1.1: градиентные пары цветов кнопок меню — все оттенки согласованы
+# (зелёный игровой, синий, фиолетовый, золотой, бирюзовый, графит)
+MENU_BTN_COLORS = {
+    "play": ("#3fb950", "#1f7a33", "#eafff0"),
+    "mini": ("#3b82f6", "#1d4ed8", "#eaf2ff"),
+    "ach": ("#8957e5", "#5b2fb8", "#f4efff"),
+    "shop": ("#e0a437", "#a8761c", "#241a05"),
+    "set": ("#2dd4bf", "#0f766e", "#032b27"),
+    "log": ("#2a3340", "#1a222c", "#aab4c0"),
+}
+
 
 class MenuScreen(Screen):
     def __init__(self, master, app):
         super().__init__(master, app)
-        self.bg = GradientBG(self, BG, "#121c2c")
+        # 1.1: фон меню заметно ярче — сочный зелёно-синий градиент
+        self.bg = GradientBG(self, "#1b3a26", "#122c44", accent=ACCENT_BRIGHT)
         self.bg.pack(fill="both", expand=True)
         self.bg.bind("<Configure>", lambda e: self._layout())
         self.anim_t = 0.0
         self.anim_job = None
         self._btn_ids = {}
         self._btn_cmds = {}
+        self._btn_grad = {}   # key -> (ids, x1, y1, x2, y2, r, c1, c2)
+        self._btn_glow = {}   # key -> последний применённый квантованный glow (перф)
+        self._title_glow = {} # i -> последний применённый квантованный glow буквы (перф)
+        self._badge_c = (0.0, 0.0)  # центр бейджа уровня — без чтения coords каждый кадр
+        self._hover_t = {}    # key -> 0..1 (анимация наведения)
+        self._hover_job = {}
         self._title_letters = []
         self._title_snake = []
         self._title_eyes = []
         self._level_shimmer = None
         self._level_span = (0, 0, 0, 1)
+        self._level_fill_w = 0.0
+        self._badge_ring = None
+        self._sparkles = []
         self._levelup_win = None
         self._ach_win = None
         self._changelog_win = None
@@ -82,22 +104,28 @@ class MenuScreen(Screen):
             h = 740
         return w, h
 
-    def _btn(self, key, cx, cy, bw, bh, text, cmd, bg=PANEL, fg=TEXT,
-             fsize=12):
+    def _btn(self, key, cx, cy, bw, bh, text, cmd, colors=None, fsize=12):
+        """Градиентная canvas-кнопка с hover-анимацией (1.1)."""
         tag = f"btn_{key}"
+        if colors is None:
+            colors = MENU_BTN_COLORS.get(key, ("#2a3340", "#1a222c", TEXT))
+        c1, c2, fg = colors
         x1, y1 = cx - bw / 2.0, cy - bh / 2.0
         x2, y2 = cx + bw / 2.0, cy + bh / 2.0
         r = min(bh / 2.0, 18)
-        poly = round_rect(self.bg, x1, y1, x2, y2, r, fill=bg,
-                          outline=blend(bg, "#ffffff", 0.28),
-                          tags=("menu", tag))
-        round_rect(self.bg, x1 + 4, y1 + 3, x2 - 4, y1 + bh * 0.42,
-                   max(4, r - 6), fill=blend(bg, "#ffffff", 0.10),
+        round_rect(self.bg, x1 + 1, y1 + 4, x2 + 1, y2 + 4, r, fill="#000000",
+                   stipple="gray25", outline="", tags=("menu", tag))
+        ids = gradient_round_btn(self.bg, x1, y1, x2, y2, r, c1, c2,
+                                 tags=("menu", tag))
+        round_rect(self.bg, x1 + 4, y1 + 3, x2 - 4, y1 + bh * 0.40,
+                   max(4, r - 6), fill="#ffffff", stipple="gray50",
                    outline="", tags=("menu", tag))
         self.bg.create_text(cx, cy + 1, text=text,
                             font=(self.app.font_ui, fsize, "bold"), fill=fg,
                             tags=("menu", tag))
-        self._btn_ids[key] = (poly, bg)
+        self._btn_ids[key] = (ids[0] if ids else None, c1)
+        self._btn_grad[key] = (ids, x1, y1, x2, y2, r, c1, c2)
+        self._hover_t[key] = 0.0
         self._btn_cmds[key] = cmd
         self.bg.tag_bind(tag, "<Enter>",
                          lambda e, k=key: self._hover(k, True))
@@ -105,12 +133,43 @@ class MenuScreen(Screen):
                          lambda e, k=key: self._hover(k, False))
 
     def _hover(self, key, on):
-        info = self._btn_ids.get(key)
-        if not info:
+        """Плавная анимация наведения: кнопка светлеет и чуть приподнимается."""
+        grad = self._btn_grad.get(key)
+        if not grad:
             return
+        job = self._hover_job.pop(key, None)
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except tk.TclError:
+                pass
+        target = 1.0 if on else 0.0
+
+        def step():
+            cur = self._hover_t.get(key, 0.0)
+            d = target - cur
+            if abs(d) < 0.1:
+                self._hover_t[key] = target
+                self._paint_hover(key)
+                self._hover_job.pop(key, None)
+                return
+            self._hover_t[key] = cur + d * 0.45
+            self._paint_hover(key)
+            self._hover_job[key] = self.after(28, step)
+
+        step()
+
+    def _paint_hover(self, key):
+        grad = self._btn_grad.get(key)
+        if not grad:
+            return
+        ids, x1, y1, x2, y2, r, c1, c2 = grad
+        t = self._hover_t.get(key, 0.0)
+        lift = 2.0 * t
         try:
-            self.bg.itemconfig(info[0],
-                               fill=blend(info[1], "#ffffff", 0.16 if on else 0.0))
+            repaint_gradient(self.bg, ids, x1, y1 - lift, x2, y2 - lift, r,
+                             blend(c1, "#ffffff", 0.18 * t),
+                             blend(c2, "#ffffff", 0.18 * t))
         except tk.TclError:
             pass
 
@@ -119,41 +178,45 @@ class MenuScreen(Screen):
         self.bg.delete("menu")
         self._btn_ids = {}
         self._btn_cmds = {}
+        self._btn_grad = {}
+        self._btn_glow = {}
+        self._title_glow = {}
+        self._hover_t = {}
         self._title_letters = []
         self._title_snake = []
         self._title_eyes = []
         self._level_shimmer = None
+        self._badge_ring = None
+        self._sparkles = []
         round_rect(self.bg, 10, 6, 74, 30, 12, fill=PANEL, outline=BORDER,
                    tags="menu")
         self.bg.create_text(42, 18, text=f"v{VERSION}",
                             font=(self.app.font_ui, 9, "bold"), fill=GOLD,
                             tags="menu")
         self._btn("log", 152, 18, 116, 24, "update log",
-                  self._open_changelog, bg=PANEL, fg=DIM, fsize=8)
+                  self._open_changelog, fsize=8)
         self._draw_title(w, h)
         self._draw_level(w, h)
         self.bg.create_text(w / 2, h * 0.455,
-                            text=f"\u25c9  {self.app.save['coins']} \u043c\u043e\u043d\u0435\u0442",
+                            text=f"\u25c9  {self.app.save['coins']} монет",
                             font=(self.app.font_ui, 13, "bold"), fill=GOLD,
                             tags="menu")
         y0 = h * 0.52
-        self._btn("play", w / 2, y0, 260, 54, "\u0418\u0413\u0420\u0410\u0422\u042c",
-                  self._play_classic, bg=ACCENT, fg="#06220c", fsize=15)
-        self._btn("mini", w / 2, y0 + 56, 260, 48, "\u041c\u0418\u041d\u0418-\u0418\u0413\u0420\u042b",
-                  lambda: self.app.show("MiniScreen"), bg=BLUE, fg="#061224",
-                  fsize=13)
-        self._btn("ach", w / 2, y0 + 112, 260, 48, "\u0414\u041e\u0421\u0422\u0418\u0416\u0415\u041d\u0418\u042f",
-                  lambda: self.app.show("AchScreen"), bg="#8957e5",
-                  fg="#f4efff", fsize=13)
-        self._btn("shop", w / 2, y0 + 168, 260, 48, "\u041c\u0410\u0413\u0410\u0417\u0418\u041d",
+        self._btn("play", w / 2, y0, 260, 54, "ИГРАТЬ",
+                  self._play_classic, fsize=15)
+        self._btn("mini", w / 2, y0 + 56, 260, 48, "МИНИ-ИГРЫ",
+                  lambda: self.app.show("MiniScreen"), fsize=13)
+        self._btn("ach", w / 2, y0 + 112, 260, 48, "ДОСТИЖЕНИЯ",
+                  lambda: self.app.show("AchScreen"), fsize=13)
+        self._btn("shop", w / 2, y0 + 168, 260, 48, "МАГАЗИН",
                   lambda: self.app.show("ShopScreen"), fsize=13)
-        self._btn("set", w / 2, y0 + 224, 260, 48, "\u041d\u0410\u0421\u0422\u0420\u041e\u0419\u041a\u0418",
+        self._btn("set", w / 2, y0 + 224, 260, 48, "НАСТРОЙКИ",
                   lambda: self.app.show("SettingsScreen"), fsize=13)
         self.bg.create_text(w / 2, h * 0.94,
-                            text=f"\u0420\u0435\u043a\u043e\u0440\u0434: {self.app.save['highscore']}",
+                            text=f"Рекорд: {self.app.save['highscore']}",
                             font=(self.app.font_ui, 11), fill=DIM, tags="menu")
         self.bg.create_text(w / 2, h * 0.975,
-                            text="WASD / \u0441\u0442\u0440\u0435\u043b\u043a\u0438 \u00b7 P \u2014 \u043f\u0430\u0443\u0437\u0430 \u00b7 R \u2014 \u0437\u0430\u043d\u043e\u0432\u043e",
+                            text="WASD / стрелки · P — пауза · R — заново",
                             font=(self.app.font_ui, 9), fill="#3a4149",
                             tags="menu")
 
@@ -200,7 +263,7 @@ class MenuScreen(Screen):
                                        fill=ACCENT, tags=("menu", "title"))
             self._title_letters.append((sh, main, i))
         self.bg.create_text(w / 2, cy + 44,
-                            text="\u0441\u043e\u0431\u0438\u0440\u0430\u0439 \u0435\u0434\u0443 \u2014 \u0441\u0442\u0430\u043d\u044c \u0441\u0430\u043c\u043e\u0439 \u0434\u043b\u0438\u043d\u043d\u043e\u0439 \u0437\u043c\u0435\u0439\u043a\u043e\u0439",
+                            text="собирай еду — стань самой длинной змейкой",
                             font=(self.app.font_ui, 10), fill=DIM,
                             tags=("menu", "title"))
         self._title_snake = []
@@ -228,13 +291,17 @@ class MenuScreen(Screen):
         t = self.anim_t
         w, h = self._geom()
         cy = h * 0.16
+        # перф: цвет буквы квантуется (шаг 0.02) — itemconfig только когда он реально сменился
         for sh, main, i in self._title_letters:
             glow = 0.15 + 0.75 * (0.5 + 0.5 * math.sin(t * 0.12 - i * 0.7))
             x = w / 2 - 110 + i * 44
             y = cy + math.sin(t * 0.08 + i * 0.6) * 3
             self.bg.coords(sh, x + 3, y + 3)
             self.bg.coords(main, x, y)
-            self.bg.itemconfig(main, fill=blend(ACCENT, ACCENT_BRIGHT, glow))
+            gq = round(glow, 2)
+            if gq != self._title_glow.get(i):
+                self._title_glow[i] = gq
+                self.bg.itemconfig(main, fill=blend(ACCENT, ACCENT_BRIGHT, gq))
         for iid, i, r in self._title_snake:
             x = w / 2 - 132 + i * 18
             y = cy + 76 + math.sin(t * 0.15 + i * 0.5) * 4
@@ -246,6 +313,8 @@ class MenuScreen(Screen):
                            hx + ox + 2, hy + oy + 2)
 
     def _draw_level(self, w=None, h=None):
+        """Экранчик уровня (1.1): выше, скруглённее, с градиентом, пульсирующим
+        бейджем и искрами; shimmer бегает ТОЛЬКО по заполненной части полосы."""
         if w is None:
             w, h = self._geom()
         self.bg.delete("level")
@@ -253,44 +322,72 @@ class MenuScreen(Screen):
         level = level_from_exp(exp)
         cur = exp_for_level(level)
         nxt = exp_for_level(level + 1)
-        frac = max(0.0, min(1.0, (exp - cur) / (nxt - cur)))
+        frac = max(0.0, min(1.0, (exp - cur) / max(1, nxt - cur)))
         cx = w / 2
-        bx0, by = cx - 170, h * 0.35 - 32
-        bx1, by1 = cx + 170, h * 0.35 + 32
-        round_rect(self.bg, bx0, by, bx1, by1, 16, fill=PANEL,
-                   outline=blend(ACCENT, BG, 0.5), tags=("menu", "level"))
-        self.bg.create_oval(bx0 + 10, by + 10, bx0 + 50, by + 50,
-                            fill=ACCENT_DARK, outline=ACCENT,
-                            tags=("menu", "level"))
-        self.bg.create_text(bx0 + 30, by + 31, text=str(level),
-                            font=(self.app.font_title, 16, "bold"),
-                            fill=ACCENT_BRIGHT, tags=("menu", "level"))
-        self.bg.create_text(bx0 + 62, by + 15, text=f"\u0423\u0420\u041e\u0412\u0415\u041d\u042c {level}",
-                            anchor="w", font=(self.app.font_ui, 11, "bold"),
+        # панель выше и мягче: 96px высотой, радиус 20
+        bx0, by = cx - 180, h * 0.35 - 48
+        bx1, by1 = cx + 180, h * 0.35 + 48
+        round_rect(self.bg, bx0 + 2, by + 5, bx1 + 2, by1 + 5, 20,
+                   fill="#000000", stipple="gray25", outline="",
+                   tags=("menu", "level"))
+        gradient_round_btn(self.bg, bx0, by, bx1, by1, 20, PANEL,
+                           blend(PANEL, ACCENT_DARK, 0.35), steps=12,
+                           tags=("menu", "level"))
+        round_rect(self.bg, bx0 + 3, by + 2, bx1 - 3, by + 30, 16,
+                   fill="#ffffff", stipple="gray75", outline="",
+                   tags=("menu", "level"))
+        # бейдж уровня: кольцо + градиент, кольцо пульсирует (анимация)
+        br = 22
+        bcx, bcy = bx0 + 34, (by + by1) / 2
+        self._badge_c = (bcx, bcy)
+        self._badge_ring = self.bg.create_oval(
+            bcx - br - 4, bcy - br - 4, bcx + br + 4, bcy + br + 4,
+            outline=ACCENT, width=2, tags=("menu", "level"))
+        gradient_round_btn(self.bg, bcx - br, bcy - br, bcx + br, bcy + br,
+                           br, ACCENT, ACCENT_DARK, steps=8,
+                           tags=("menu", "level"))
+        self.bg.create_text(bcx, bcy + 1, text=str(level),
+                            font=(self.app.font_title, 17, "bold"),
+                            fill="#eafff0", tags=("menu", "level"))
+        self.bg.create_text(bx0 + 66, by + 20, text=f"УРОВЕНЬ {level}",
+                            anchor="w", font=(self.app.font_ui, 12, "bold"),
                             fill=TEXT, tags=("menu", "level"))
-        self.bg.create_text(bx0 + 62, by + 33,
-                            text=f"{exp} EXP \u00b7 \u0434\u043e \u0443\u0440. {level + 1}: {nxt - exp}",
-                            anchor="w", font=(self.app.font_ui, 8), fill=DIM,
+        self.bg.create_text(bx0 + 66, by + 40,
+                            text=f"{exp} EXP · до ур. {level + 1}: {nxt - exp}",
+                            anchor="w", font=(self.app.font_ui, 9), fill=DIM,
                             tags=("menu", "level"))
-        px0, py0, px1, py1 = bx0 + 64, by + 44, bx1 - 12, by + 53
-        round_rect(self.bg, px0, py0, px1, py1, 4, fill=LOCKED_BG,
+        px0, py0, px1, py1 = bx0 + 66, by + 60, bx1 - 14, by + 74
+        round_rect(self.bg, px0, py0, px1, py1, 7, fill=LOCKED_BG,
                    outline="", tags=("menu", "level"))
+        self._level_fill_w = (px1 - px0) * frac
         if frac > 0:
-            width = (px1 - px0) * frac
+            width = self._level_fill_w
             seg_w = width / 6
             for k in range(6):
                 col = blend(GOLD, ACCENT_BRIGHT, k / 5)
                 round_rect(self.bg, px0 + k * seg_w, py0,
-                           px0 + (k + 1) * seg_w, py1, 3, fill=col,
+                           px0 + (k + 1) * seg_w, py1, 5, fill=col,
                            outline="", tags=("menu", "level"))
-            if not self.app.save.get("low_spec"):
-                span = max(1, (px1 - px0 - 16))
-                sx = px0 + (self.anim_t * 4) % span
+            # 1.1: shimmer живёт строго внутри заполненной части
+            if not self.app.save.get("low_spec") and width > 20:
+                span = max(1, width - 14)
+                sx = px0 + (self.anim_t * 3) % span
                 self._level_shimmer = self.bg.create_rectangle(
                     sx, py0 + 1, sx + 14, py1 - 1,
                     fill=blend(GOLD, "#ffffff", 0.45),
                     outline="", tags=("menu", "level"))
                 self._level_span = (px0, py0 + 1, py1 - 1, span)
+        # искры вокруг панельки (при low_spec не создаём)
+        if not self.app.save.get("low_spec"):
+            for k in range(6):
+                a = math.radians(k * 60)
+                sx = cx + math.cos(a) * 196
+                sy = (by + by1) / 2 + math.sin(a) * 62
+                iid = self.bg.create_oval(
+                    sx - 2, sy - 2, sx + 2, sy + 2,
+                    fill=blend(ACCENT_BRIGHT, "#ffffff", 0.3), outline="",
+                    tags=("menu", "level"))
+                self._sparkles.append((iid, sx, sy, k))
 
     def _maybe_show_levelup(self):
         pending = self.app.save.get("pending_level", 0)
@@ -298,24 +395,24 @@ class MenuScreen(Screen):
             return False
         if self._raise_window("_levelup_win"):
             return True
-        unlocked = [f"\u0421\u043b\u043e\u0436\u043d\u043e\u0441\u0442\u044c \u00ab{cfg['label']}\u00bb"
+        unlocked = [f"Сложность «{cfg['label']}»"
                     for cfg in DIFFICULTIES.values() if cfg["level"] == pending]
         for item in THEMES:
             if item.get("level") == pending and item["price"] > 0:
-                unlocked.append(f"\u0424\u043e\u043d \u00ab{item['name']}\u00bb")
+                unlocked.append(f"Фон «{item['name']}»")
         for item in FOOD_ITEMS:
             if item.get("level") == pending and item["price"] > 0:
-                unlocked.append(f"\u0415\u0434\u0430 \u00ab{item['name']}\u00bb")
+                unlocked.append(f"Еда «{item['name']}»")
         for item in ACCESSORIES:
             if item.get("level") == pending and item["price"] > 0:
-                unlocked.append(f"\u0410\u043a\u0441\u0435\u0441\u0441\u0443\u0430\u0440 \u00ab{item['name']}\u00bb")
+                unlocked.append(f"Аксессуар «{item['name']}»")
         win = tk.Toplevel(self)
         self._levelup_win = win
-        win.title("\u041d\u043e\u0432\u044b\u0439 \u0443\u0440\u043e\u0432\u0435\u043d\u044c!")
+        win.title("Новый уровень!")
         win.configure(bg=BG)
         win.resizable(False, False)
         win.transient(self.app)
-        self._borderless(win, "\u2728 \u041d\u043e\u0432\u044b\u0439 \u0443\u0440\u043e\u0432\u0435\u043d\u044c!", 380, BG)
+        self._borderless(win, "✨ Новый уровень!", 380, BG)
         cv = tk.Canvas(win, width=380, height=210, bg=BG, highlightthickness=0)
         cv.pack()
         cx, cyc = 190, 106
@@ -334,23 +431,23 @@ class MenuScreen(Screen):
         cv.create_text(cx, cyc - 2, text=str(pending),
                        font=(self.app.font_title, 44, "bold"),
                        fill=ACCENT_BRIGHT)
-        cv.create_text(cx, 192, text="\u0423\u0420\u041e\u0412\u0415\u041d\u042c \u041f\u041e\u0412\u042b\u0428\u0415\u041d!",
+        cv.create_text(cx, 192, text="УРОВЕНЬ ПОВЫШЕН!",
                        font=(self.app.font_title, 16, "bold"), fill=GOLD)
-        tk.Label(win, text=f"\u0422\u0435\u043f\u0435\u0440\u044c \u0443 \u0442\u0435\u0431\u044f {self.app.save.get('exp', 0)} EXP",
+        tk.Label(win, text=f"Теперь у тебя {self.app.save.get('exp', 0)} EXP",
                  bg=BG, fg=TEXT, font=(self.app.font_ui, 11, "bold")).pack()
         if unlocked:
-            tk.Label(win, text="\u041d\u041e\u0412\u041e\u0415 \u0414\u041e\u0421\u0422\u0423\u041f\u041d\u041e:", bg=BG, fg=ACCENT,
+            tk.Label(win, text="НОВОЕ ДОСТУПНО:", bg=BG, fg=ACCENT,
                      font=(self.app.font_ui, 10, "bold")).pack(pady=(8, 0))
             for line in unlocked[:6]:
-                tk.Label(win, text=f"\u2605  {line}", bg=PANEL, fg=TEXT,
+                tk.Label(win, text=f"★  {line}", bg=PANEL, fg=TEXT,
                          font=(self.app.font_ui, 9, "bold")).pack(
                              pady=1, ipadx=10, ipady=2)
-        RoundButton(win, "\u041a\u0440\u0443\u0442\u043e!",
+        RoundButton(win, "Круто!",
                     lambda: (win.destroy(), self.refocus()), width=150, height=40,
                     bg=ACCENT, fg="#06220c", app_bg=BG,
                     font=(self.app.font_ui, 12, "bold")).pack(pady=14)
         self._center_window(win)
-        # \u043e\u043a\u043d\u043e \u0443\u0441\u043f\u0435\u0448\u043d\u043e \u043f\u043e\u0441\u0442\u0440\u043e\u0435\u043d\u043e \u2014 \u0442\u043e\u043b\u044c\u043a\u043e \u0442\u0435\u043f\u0435\u0440\u044c \u0441\u0431\u0440\u0430\u0441\u044b\u0432\u0430\u0435\u043c pending
+        # окно успешно построено — только теперь сбрасываем pending
         self.app.save["pending_level"] = 0
         self.app.commit()
         sfx("levelup")
@@ -366,11 +463,11 @@ class MenuScreen(Screen):
             return True
         win = tk.Toplevel(self)
         self._ach_win = win
-        win.title("\u0414\u043e\u0441\u0442\u0438\u0436\u0435\u043d\u0438\u0435 \u043f\u043e\u043b\u0443\u0447\u0435\u043d\u043e!")
+        win.title("Достижение выполнено!")
         win.configure(bg=BG)
         win.resizable(False, False)
         win.transient(self.app)
-        self._borderless(win, "\u2605 \u0414\u043e\u0441\u0442\u0438\u0436\u0435\u043d\u0438\u0435 \u043f\u043e\u043b\u0443\u0447\u0435\u043d\u043e!", 380, BG)
+        self._borderless(win, "★ Достижение выполнено!", 380, BG)
         cv = tk.Canvas(win, width=380, height=170, bg=BG, highlightthickness=0)
         cv.pack()
         cx, cyc = 190, 78
@@ -382,19 +479,21 @@ class MenuScreen(Screen):
                            fill=col, width=2)
         cv.create_oval(138, 26, 242, 130, fill="#3a2a5e", outline="#8957e5",
                        width=3)
-        cv.create_text(cx, cyc - 2, text="\u2605",
+        cv.create_text(cx, cyc - 2, text="★",
                        font=(self.app.font_title, 40, "bold"), fill="#c9a8ff")
-        cv.create_text(cx, 152, text="\u0414\u041e\u0421\u0422\u0418\u0416\u0415\u041d\u0418\u0415 \u041f\u041e\u041b\u0423\u0427\u0415\u041d\u041e!",
+        cv.create_text(cx, 146, text="ДОСТИЖЕНИЕ ВЫПОЛНЕНО!",
                        font=(self.app.font_title, 15, "bold"), fill="#c9a8ff")
+        cv.create_text(cx, 166, text="Заберите награду во вкладке «Достижения»",
+                       font=(self.app.font_ui, 9), fill=DIM)
         for name in pending[:5]:
-            tk.Label(win, text=f"\u2605  {name}", bg=BG, fg=TEXT,
+            tk.Label(win, text=f"★  {name}", bg=BG, fg=TEXT,
                      font=(self.app.font_ui, 10, "bold")).pack()
-        RoundButton(win, "\u041e\u0442\u043b\u0438\u0447\u043d\u043e!",
+        RoundButton(win, "Отлично!",
                     lambda: (win.destroy(), self.refocus()), width=150, height=40,
                     bg="#8957e5", fg="#f4efff", app_bg=BG,
                     font=(self.app.font_ui, 12, "bold")).pack(pady=12)
         self._center_window(win)
-        # \u043e\u043a\u043d\u043e \u043f\u043e\u0441\u0442\u0440\u043e\u0435\u043d\u043e \u2014 \u0441\u0431\u0440\u0430\u0441\u044b\u0432\u0430\u0435\u043c pending
+        # окно построено — сбрасываем pending
         self.app.save["pending_ach"] = []
         self.app.commit()
         sfx("win")
@@ -428,26 +527,63 @@ class MenuScreen(Screen):
 
     def _anim_level(self):
         sh = self._level_shimmer
-        if not sh:
-            return
-        px0, py0, py1, span = self._level_span
-        sx = px0 + (self.anim_t * 4) % span
-        self.bg.coords(sh, sx, py0, sx + 14, py1)
+        if sh:
+            px0, py0, py1, span = self._level_span
+            # 1.1: shimmer не выезжает на незаполненную часть полосы
+            sx = px0 + (self.anim_t * 3) % max(1, span)
+            self.bg.coords(sh, sx, py0, sx + 14, py1)
+        t = self.anim_t
+        # пульс кольца бейджа уровня
+        ring = self._badge_ring
+        if ring:
+            # перф: центр бейджа хранится заранее — никакого чтения coords из Tcl каждый кадр
+            cx, cy = self._badge_c
+            br = 26 + math.sin(t * 0.11) * 2.0
+            try:
+                self.bg.coords(ring, cx - br, cy - br, cx + br, cy + br)
+            except (tk.TclError, ValueError):
+                return
+        # искры вокруг панельки уровня (орбита вокруг базовой точки)
+        for iid, bx, byy, k in self._sparkles:
+            a = math.radians(k * 60 + t * 2)
+            sx = bx + math.cos(a) * 4.0
+            sy = byy + math.sin(a) * 3.0
+            r = 2 + math.sin(t * 0.2 + k) * 1.0
+            try:
+                self.bg.coords(iid, sx - r, sy - r, sx + r, sy + r)
+            except tk.TclError:
+                continue
 
     def _animate(self):
         self.anim_t += 1
         self._anim_title()
         self._anim_level()
+        # 1.1: «дыхание» градиентных кнопок — лёгкая волна яркости по очереди.
+        # перф: glow квантуется (шаг 0.02) и repaint запускается только когда он сменился
+        for i, (key, grad) in enumerate(list(self._btn_grad.items())):
+            ids, x1, y1, x2, y2, r, c1, c2 = grad
+            glow = 0.05 + 0.05 * math.sin(self.anim_t * 0.09 - i * 0.9)
+            gq = round(glow, 2)
+            if gq == self._btn_glow.get(key):
+                continue
+            self._btn_glow[key] = gq
+            try:
+                repaint_gradient(self.bg, ids, x1, y1, x2, y2, r,
+                                 blend(c1, "#ffffff", gq),
+                                 blend(c2, "#ffffff", gq))
+            except tk.TclError:
+                continue
         # noinspection PyArgumentList
         self.anim_job = self.after(60, self._animate)
 
     def _open_changelog(self):
         if self._raise_window("_changelog_win"):
             return
-        wbg = "#0b1420"
+        # 1.1: update log в зелёной гамме — основном цвете игры
+        wbg = "#0c1a10"
         win = tk.Toplevel(self)
         self._changelog_win = win
-        win.title("Update log \u2014 SNAKEY")
+        win.title("Update log — SNAKEY")
         win.configure(bg=wbg)
         win.resizable(False, False)
         win.transient(self.app)
@@ -461,21 +597,21 @@ class MenuScreen(Screen):
                 pass
             self.refocus()
 
-        self._borderless(win, "Update log \u2014 SNAKEY", 560, wbg, on_close=close)
+        self._borderless(win, "Update log — SNAKEY", 560, wbg, on_close=close)
         cv = tk.Canvas(win, width=560, height=88, bg=wbg, highlightthickness=0)
         cv.pack()
-        gradient_bands(cv, 0, 0, 560, 88, wbg, "#16233a", 12)
+        gradient_bands(cv, 0, 0, 560, 88, wbg, "#14351e", 12)
         cx, cyc = 280, 40
         for k in range(16):
             a = math.radians(k * 22.5)
             cv.create_line(cx + math.cos(a) * 42, cyc + math.sin(a) * 42,
                            cx + math.cos(a) * 60, cyc + math.sin(a) * 60,
-                           fill=blend(GOLD, wbg, 0.4), width=2)
+                           fill=blend(ACCENT, wbg, 0.4), width=2)
         cv.create_text(cx + 2, cyc + 1, text="UPDATE LOG",
-                       font=(self.app.font_title, 20, "bold"), fill="#3a2a05")
+                       font=(self.app.font_title, 20, "bold"), fill="#0a2d12")
         cv.create_text(cx, cyc, text="UPDATE LOG",
-                       font=(self.app.font_title, 20, "bold"), fill=GOLD)
-        cv.create_text(cx, cyc + 26, text="\u0438\u0441\u0442\u043e\u0440\u0438\u044f \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0439 SNAKEY",
+                       font=(self.app.font_title, 20, "bold"), fill=ACCENT_BRIGHT)
+        cv.create_text(cx, cyc + 26, text="история изменений SNAKEY",
                        font=(self.app.font_ui, 9), fill=DIM)
         body = tk.Frame(win, bg=wbg)
         body.pack(fill="both", expand=True)
@@ -495,23 +631,25 @@ class MenuScreen(Screen):
             pill = tk.Canvas(inner, width=540, height=30, bg=wbg,
                              highlightthickness=0)
             pill.pack(pady=(10, 0))
-            round_rect(pill, 1, 1, 538, 29, 14, fill=PANEL,
-                       outline=blend(GOLD, wbg, 0.4))
+            round_rect(pill, 1, 1, 538, 29, 14, fill="#12251a",
+                       outline=blend(ACCENT, wbg, 0.45))
             pill.create_text(18, 15, text=f"v{ver}", anchor="w",
-                             font=(self.app.font_ui, 11, "bold"), fill=GOLD)
-            pill.create_text(522, 15, text=f"{len(items)} \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0439", anchor="e",
+                             font=(self.app.font_ui, 11, "bold"),
+                             fill=ACCENT_BRIGHT)
+            pill.create_text(522, 15, text=f"{len(items)} обновлений", anchor="e",
                              font=(self.app.font_ui, 8), fill=DIM)
             for line in items:
                 row = tk.Frame(inner, bg=wbg)
                 row.pack(fill="x", padx=30, pady=1)
-                tk.Label(row, text="\uff0b", bg=wbg, fg=GOLD,
+                tk.Label(row, text="＋", bg=wbg, fg=ACCENT,
                          font=(self.app.font_ui, 10, "bold")).pack(
                              side="left", padx=(2, 7))
                 tk.Label(row, text=line, bg=wbg, fg=TEXT, wraplength=450,
                          justify="left", font=(self.app.font_ui, 9),
                          anchor="w").pack(side="left")
-        RoundButton(win, "\u0417\u0430\u043a\u0440\u044b\u0442\u044c", close, width=150, height=38,
-                    app_bg=wbg, font=(self.app.font_ui, 10, "bold")).pack(pady=12)
+        RoundButton(win, "Закрыть", close, width=150, height=38,
+                    bg="#184d28", fg="#eafff0", app_bg=wbg,
+                    font=(self.app.font_ui, 10, "bold")).pack(pady=12)
         win.protocol("WM_DELETE_WINDOW", close)
         self._center_window(win)
         # окно появляется ПОВЕРХ главного сразу, а не со второго клика
