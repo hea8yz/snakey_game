@@ -79,14 +79,26 @@ class MinigameMixin:
         self._mgsnake_active = need
 
     def _mg_indicator(self, text, color, anchor_x):
+        # пул из двух text-items (тень + цвет): вместо create+delete каждый тик
+        # только coords/itemconfig — заметно меньше работы canvas в мини-играх
         c = self.canvas
         x = 8 if anchor_x < 0 else COLS * CELL - 8
-        c.create_text(x, 16, text=text, anchor="e" if anchor_x > 0 else "w",
-                      font=(self.app.font_ui, 11, "bold"), fill="#000000",
-                      tags="mgfx")
-        c.create_text(x, 14, text=text, anchor="e" if anchor_x > 0 else "w",
-                      font=(self.app.font_ui, 11, "bold"), fill=color,
-                      tags="mgfx")
+        anchor = "e" if anchor_x > 0 else "w"
+        it = self._mgind_items
+        if not it:
+            self._mgind_items = [
+                c.create_text(x, 16, text=text, anchor=anchor,
+                              font=(self.app.font_ui, 11, "bold"),
+                              fill="#000000", tags="mgfxp"),
+                c.create_text(x, 14, text=text, anchor=anchor,
+                              font=(self.app.font_ui, 11, "bold"),
+                              fill=color, tags="mgfxp"),
+            ]
+            return
+        c.coords(it[0], x, 16)
+        c.coords(it[1], x, 14)
+        c.itemconfig(it[0], text=text, anchor=anchor)
+        c.itemconfig(it[1], text=text, anchor=anchor, fill=color)
 
     def _mg4_setup(self):
         for _ in range(3):
@@ -301,9 +313,12 @@ class MinigameMixin:
                  (0, cy - r, cx - r, cy + r), (cx + r, cy - r, w, cy + r))):
             c.coords(it, *coords)
         c.coords(self._dark_items[4], cx - r, cy - r, cx + r, cy + r)
-        # еда пересоздаётся при каждом respawn и попадает ПОВЕРХ тьмы —
-        # поднимаем тьму, чтобы фрукты вне фонарика были скрыты
-        c.tag_raise("dark")
+        # поднимаем тьму только когда поверх неё появились новые элементы
+        # (перерисовка еды, рост змейки, пересоздание статики) — в остальных
+        # кадрах стек не меняется, и лишний tag_raise не нужен
+        if getattr(self, "_dark_dirty", True):
+            c.tag_raise("dark")
+            self._dark_dirty = False
 
     def _mg8_setup(self):
         for _ in range(4):
@@ -314,11 +329,8 @@ class MinigameMixin:
         self.mg8_build = False
         self.mg8_walls = set()
         self._mg8_wall_dirty = True
-        # стройка мышью: клик по полю ставит блок (только в режиме стройки)
-        try:
-            self.canvas.bind("<Button-1>", self._mg8_canvas_click, add="+")
-        except Exception:
-            pass
+        # биндинг клика для стройки живёт в GameScreen.__init__: здесь он
+        # добавлялся заново при каждом new_game (дубли -> несколько блоков за клик)
 
     def _mg8_canvas_click(self, event):
         if self.mg != "mg8" or not getattr(self, "mg8_build", False):

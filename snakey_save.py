@@ -96,10 +96,23 @@ def load_save():
         pass
     return data
 def save_save(data):
+    # атомарная запись: сперва во временный файл, затем replace. Прямая запись
+    # при сбое/выключении ПК в момент сохранения повреждала файл прогресса
+    tmp = SAVE_FILE.with_name(".snakey_save.tmp")
     try:
-        SAVE_FILE.write_text(json.dumps(data))
+        tmp.write_text(json.dumps(data))
+        tmp.replace(SAVE_FILE)
     except OSError:
-        pass
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+        # запасной путь — старое поведение прямой записи
+        try:
+            SAVE_FILE.write_text(json.dumps(data))
+        except OSError:
+            pass
 def exp_for_level(level):
     x = max(0, level - 1)
     return 10 * x * x + 2 * x * x * x

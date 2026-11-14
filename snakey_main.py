@@ -53,7 +53,7 @@ def _local_version():
                 return v
     except Exception:
         pass
-    return "0.9.2"
+    return "1.0"
 
 
 def _version_tuple(v):
@@ -312,7 +312,9 @@ class App(tk.Tk):
             pass
 
     def _on_key(self, event):
-        self.frames[self.current].on_key(event)
+        frame = self.frames.get(self.current)
+        if frame is not None:
+            frame.on_key(event)
 
     def _on_wheel(self, event):
         frame = self.frames.get(self.current)
