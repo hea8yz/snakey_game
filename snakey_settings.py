@@ -9,12 +9,13 @@ from snakey_content import (
     BG,
     BLUE,
     BORDER,
-    COLORS,
     DIFFICULTIES,
     DIM,
     GRADIENTS,
     LOCKED_BG,
+    MUSIC_BY_ID,
     MUSIC_TRACKS,
+    RED,
     PANEL,
     TEXT,
     THEMES,
@@ -26,8 +27,7 @@ from snakey_content import (
 )
 from snakey_drawing import draw_acc
 from snakey_save import level_from_exp
-from snakey_shop import ShopCard
-from snakey_utils import blend, hsv_hex, round_rect, seg_color
+from snakey_utils import blend, gradient_bands, hsv_hex, round_rect, seg_color
 from snakey_widgets import GradientBG, RoundButton, Screen
 
 class VolumeSlider(tk.Canvas):
@@ -83,9 +83,11 @@ class SettingsScreen(Screen):
         self.bg.place(x=0, y=0, relwidth=1, relheight=1)
         tk.Label(self, text="НАСТРОЙКИ", bg=BG, fg=ACCENT,
                  font=(app.font_title, 20, "bold")).pack(pady=(14, 2))
-        self.preview = tk.Canvas(self, width=260, height=62, bg=BG,
+        self.preview = tk.Canvas(self, width=320, height=132, bg=BG,
                                  highlightthickness=0)
-        self.preview.pack(pady=(2, 0))
+        self.preview.pack(pady=(4, 0))
+        tk.Label(self, text="Скин, фон и аксессуары выбираются в магазине",
+                 bg=BG, fg=DIM, font=(app.font_ui, 9)).pack()
         self.status_var = tk.StringVar()
         tk.Label(self, textvariable=self.status_var, bg=BG, fg=DIM,
                  font=(app.font_ui, 10)).pack()
@@ -105,10 +107,6 @@ class SettingsScreen(Screen):
                         lambda e: self.scroller.configure(
                             scrollregion=self.scroller.bbox("all")))
         self.scroller.bind("<Configure>", self._on_resize)
-
-        self._section("Цвет змейки")
-        self.grid_frame = tk.Frame(self.inner, bg=self.mid)
-        self.grid_frame.pack(padx=20)
 
         self._section("Сложность")
         self.diff_frame = tk.Frame(self.inner, bg=self.mid)
@@ -164,6 +162,18 @@ class SettingsScreen(Screen):
         self._section("Фоновая музыка")
         self.track_frame = tk.Frame(self.inner, bg=self.mid)
         self.track_frame.pack()
+        self.track_prev_btn = RoundButton(
+            self.track_frame, "◀", self._track_prev, width=56, height=42,
+            app_bg=self.mid, font=(self.app.font_ui, 12, "bold"))
+        self.track_prev_btn.pack(side="left", padx=(0, 6))
+        self.track_btn = RoundButton(
+            self.track_frame, "", self._track_next, width=280, height=42,
+            app_bg=self.mid, font=(self.app.font_ui, 10, "bold"))
+        self.track_btn.pack(side="left")
+        self.track_next_btn = RoundButton(
+            self.track_frame, "▶", self._track_next, width=56, height=42,
+            app_bg=self.mid, font=(self.app.font_ui, 12, "bold"))
+        self.track_next_btn.pack(side="left", padx=(6, 0))
         tk.Label(self.inner,
                  text="Новый трек можно получить за достижения",
                  bg=self.mid, fg=DIM, font=(app.font_ui, 9)).pack()
@@ -194,6 +204,67 @@ class SettingsScreen(Screen):
         round_rect(cv, 1, 1, 338, 29, 14, fill=PANEL, outline=BORDER)
         cv.create_text(170, 15, text=title,
                        font=(self.app.font_ui, 11, "bold"), fill=ACCENT)
+
+    def _paint_preview(self):
+        """Экранчик предпросмотра: змейка выбранным цветом с аксессуаром
+        на фоне выбранной темы."""
+        p = self.preview
+        p.delete("all")
+        W, H = 320, 132
+        theme = THEME_BY_ID.get(self.app.save.get("theme"), THEMES[0])
+        sel = self.app.save.get("selected", ACCENT)
+        acc = self.app.save.get("accessory", "none")
+        # фон выбранной темы: градиент или шахматная клетка
+        if theme.get("grad"):
+            gradient_bands(p, 5, 5, W - 5, H - 5,
+                           theme["grad"][0], theme["grad"][1], 12)
+        else:
+            p.create_rectangle(5, 5, W - 5, H - 5, fill=theme["grid_a"],
+                               outline="")
+            cs = 16
+            for r in range((H - 10) // cs + 1):
+                for c in range((W - 10) // cs + 1):
+                    if (r + c) % 2:
+                        p.create_rectangle(5 + c * cs, 5 + r * cs,
+                                           5 + (c + 1) * cs, 5 + (r + 1) * cs,
+                                           fill=theme["grid_b"], outline="")
+        # лёгкий намёк на декор темы
+        dec_col = {"stars": "#ffffff", "snow": "#ffffff", "flowers": "#f778ba",
+                   "petals": "#f778ba", "embers": "#ff9f1c", "bubbles": "#bfe6ff",
+                   "leaves": "#7ee08a", "glow": "#a06bff", "stones": "#8b949e",
+                   "bushes": "#5d8f3e"}.get(theme.get("decor"))
+        if dec_col:
+            for x, y, s in ((40, 28, 2), (272, 36, 1.5), (250, 98, 1.8),
+                            (66, 102, 1.4), (150, 22, 1.2)):
+                p.create_oval(x - s, y - s, x + s, y + s, fill=dec_col,
+                              outline="")
+        # рамка в цвете границы темы
+        round_rect(p, 3, 3, W - 3, H - 3, 16, fill="",
+                   outline=theme["border"], width=2)
+        # змейка выбранным цветом (хвост слева, голова справа)
+        cy = H // 2 + 8
+        n = 5
+        head_x = 200
+        for i in range(n):
+            x = head_x - i * 26
+            round_rect(p, x - 12, cy - 12, x + 12, cy + 12, 7,
+                       fill=seg_color(sel, i, n, 0), outline="")
+        ring = (blend(GRADIENTS[sel][1], "#ffffff", 0.3) if sel in GRADIENTS
+                else hsv_hex(0.0, 0.85, 0.95) if sel == "rainbow"
+                else blend(sel, "#ffffff", 0.5))
+        p.create_oval(head_x - 14, cy - 14, head_x + 14, cy + 14,
+                      outline=ring, width=2)
+        p.create_oval(head_x + 2, cy - 7, head_x + 7, cy - 2,
+                      fill="#06220c", outline="")
+        p.create_oval(head_x + 2, cy + 2, head_x + 7, cy + 7,
+                      fill="#06220c", outline="")
+        p.create_line(head_x + 14, cy, head_x + 20, cy, fill=RED, width=2)
+        if acc != "none":
+            draw_acc(p, head_x, cy, acc)
+        # название темы в углу экранчика
+        p.create_text(16, H - 14, text=theme["name"], anchor="w",
+                      font=(self.app.font_ui, 9, "bold"),
+                      fill=theme["border"])
 
     def _paint_low(self):
         on = bool(self.app.save.get("low_spec", False))
@@ -315,32 +386,46 @@ class SettingsScreen(Screen):
         self.app.commit()
         self._paint_au()
 
-    def _paint_tracks(self):
+    def _owned_tracks(self):
         owned = set(self.app.save.get("owned_music", ["classic"]))
+        return [tr for tr in MUSIC_TRACKS if tr["id"] in owned]
+
+    def _paint_tracks(self):
+        owned = self._owned_tracks()
         cur = self.app.save.get("music_track", "classic")
-        if getattr(self, "_tracks_key", None) == (cur, tuple(sorted(owned))):
-            return  # \u043d\u0438\u0447\u0435\u0433\u043e \u043d\u0435 \u0438\u0437\u043c\u0435\u043d\u0438\u043b\u043e\u0441\u044c \u2014 \u043a\u043d\u043e\u043f\u043a\u0438 \u043d\u0435 \u043f\u0435\u0440\u0435\u0441\u043e\u0437\u0434\u0430\u0451\u043c
-        self._tracks_key = (cur, tuple(sorted(owned)))
-        for w in self.track_frame.winfo_children():
-            w.destroy()
-        for tr in MUSIC_TRACKS:
-            key = tr["id"]
-            selected = key == cur
-            if key in owned:
-                btn = RoundButton(self.track_frame, tr["name"],
-                                  command=(lambda k=key: self._set_track(k)),
-                                  width=170, height=40,
-                                  bg=ACCENT_DARK if selected else PANEL,
-                                  fg="#c9ffd4" if selected else TEXT,
-                                  app_bg=self.mid,
-                                  font=(self.app.font_ui, 10, "bold"))
-            else:
-                btn = RoundButton(self.track_frame,
-                                  f"🔒 {tr['name']}",
-                                  width=170, height=40, bg=LOCKED_BG, fg=DIM,
-                                  app_bg=self.mid,
-                                  font=(self.app.font_ui, 10, "bold"))
-            btn.pack(side="left", padx=4)
+        ids = [tr["id"] for tr in owned]
+        if cur not in ids:
+            cur = ids[0]
+            self.app.save["music_track"] = cur
+        key = (cur, tuple(ids))
+        if getattr(self, "_tracks_key", None) == key:
+            return  # ничего не изменилось — кнопки не пересоздаём
+        self._tracks_key = key
+        idx = ids.index(cur) + 1
+        name = MUSIC_BY_ID[cur]["name"]
+        self.track_btn.text = f"♫ {name}   ·   {idx} из {len(owned)}"
+        self.track_btn.base_fg = "#c9ffd4" if len(owned) > 1 else TEXT
+        self.track_btn.repaint()
+        multi = len(owned) > 1
+        for b in (self.track_prev_btn, self.track_next_btn):
+            b.base_fg = TEXT if multi else DIM
+            b.repaint()
+
+    def _track_step(self, step):
+        owned = self._owned_tracks()
+        if len(owned) < 2:
+            return
+        ids = [tr["id"] for tr in owned]
+        cur = self.app.save.get("music_track", "classic")
+        if cur not in ids:
+            cur = ids[0]
+        self._set_track(ids[(ids.index(cur) + step) % len(ids)])
+
+    def _track_prev(self):
+        self._track_step(-1)
+
+    def _track_next(self):
+        self._track_step(1)
 
     def _set_track(self, key):
         if key not in set(self.app.save.get("owned_music", ["classic"])):
@@ -361,39 +446,7 @@ class SettingsScreen(Screen):
         self._paint_au()
         self._paint_volumes()
         self._paint_tracks()
-        p = self.preview
-        p.delete("all")
-        sel = self.app.save.get("selected", ACCENT)
-        acc = self.app.save.get("accessory", "none")
-        for i in range(3):
-            x = 104 + i * 40
-            color = seg_color(sel, i, 3, 0)
-            round_rect(p, x - 15, 26, x + 15, 54, 8, fill=color, outline="")
-        ring = (blend(GRADIENTS[sel][1], "#ffffff", 0.3) if sel in GRADIENTS
-                else hsv_hex(0.0, 0.85, 0.95) if sel == "rainbow"
-                else blend(sel, "#ffffff", 0.5))
-        p.create_oval(87, 22, 121, 58, outline=ring, width=2)
-        if acc != "none":
-            draw_acc(p, 104, 40, acc)
-        owned_ids = tuple(sorted(set(self.app.save["owned"])))
-        if getattr(self, "_grid_built", None) == owned_ids:
-            # набор цветов не изменился — только перерисовать карточки
-            for w in self.grid_frame.winfo_children():
-                try:
-                    w._paint()
-                except (AttributeError, tk.TclError):
-                    pass
-        else:
-            self._grid_built = owned_ids
-            for w in self.grid_frame.winfo_children():
-                w.destroy()
-            by_id = {it["id"]: it for it in COLORS}
-            owned_items = [by_id[iid] for iid in owned_ids if iid in by_id]
-            for i, item in enumerate(owned_items):
-                card = ShopCard(self.grid_frame, self.app, "color", item,
-                                self._rebuild, card_bg=self.mid)
-                card.grid(row=i // 5, column=i % 5, padx=4, pady=4,
-                          sticky="nsew")
+        self._paint_preview()
         level = level_from_exp(self.app.save.get("exp", 0))
         current = self.app.save.get("speed", "normal")
         if DIFFICULTIES.get(current, DIFFICULTIES["normal"])["level"] > level:
