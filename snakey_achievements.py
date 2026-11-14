@@ -91,6 +91,8 @@ class AchScreen(Screen):
                         lambda e: self.scroller.configure(
                             scrollregion=self.scroller.bbox("all")))
         self.scroller.bind("<Configure>", self._on_resize)
+        self._cards = []
+        self._built = False
         RoundButton(self, "←  Назад", lambda: app.show("MenuScreen"),
                     width=170, height=40, app_bg=self.bot,
                     font=(app.font_ui, 11, "bold")).pack(pady=(6, 10))
@@ -121,8 +123,23 @@ class AchScreen(Screen):
                 col = blend("#8957e5", "#c9a8ff", k / 4)
                 round_rect(p, 1 + k * seg_w, 1, 1 + (k + 1) * seg_w, 13, 5,
                            fill=col, outline="")
+        if self._built and self._cards:
+            # карточки уже созданы — только обновить их состояние
+            alive = []
+            for card in self._cards:
+                try:
+                    card._paint()
+                    alive.append(card)
+                except tk.TclError:
+                    pass
+            self._cards = alive
+            if len(self._cards) == len(ACHIEVEMENTS):
+                return
+        self._built = True
         for w in self.inner.winfo_children():
             w.destroy()
+        self._cards = []
         for ach in ACHIEVEMENTS:
-            AchCard(self.inner, self.app, ach, card_bg=self.mid).pack(
-                fill="x", pady=3)
+            card = AchCard(self.inner, self.app, ach, card_bg=self.mid)
+            card.pack(fill="x", pady=3)
+            self._cards.append(card)

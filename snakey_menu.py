@@ -37,6 +37,7 @@ class MenuScreen(Screen):
         self.anim_t = 0.0
         self.anim_job = None
         self._btn_ids = {}
+        self._btn_cmds = {}
         self._title_letters = []
         self._title_snake = []
         self._title_eyes = []
@@ -45,7 +46,32 @@ class MenuScreen(Screen):
         self._levelup_win = None
         self._ach_win = None
         self._changelog_win = None
+        # один обработчик на весь canvas: клик всегда срабатывает ровно раз,
+        # даже если элементы меню пересоздаются или перекрываются
+        self.bg.bind("<Button-1>", self._on_canvas_click, add="+")
         self._layout()
+
+    def _on_canvas_click(self, event):
+        try:
+            items = self.bg.find_overlapping(event.x - 1, event.y - 1,
+                                             event.x + 1, event.y + 1)
+        except tk.TclError:
+            return
+        for iid in reversed(items):
+            try:
+                tags = self.bg.gettags(iid)
+            except tk.TclError:
+                continue
+            for t in tags:
+                if t.startswith("btn_"):
+                    key = t[4:]
+                    self._hover(key, True)
+                    self.bg.after(120, lambda k=key: self._hover(k, False))
+                    sfx("click")
+                    cmd = self._btn_cmds.get(key)
+                    if cmd is not None:
+                        cmd()
+                    return
 
     def _geom(self):
         w = self.bg.winfo_width() or 0
@@ -72,11 +98,11 @@ class MenuScreen(Screen):
                             font=(self.app.font_ui, fsize, "bold"), fill=fg,
                             tags=("menu", tag))
         self._btn_ids[key] = (poly, bg)
+        self._btn_cmds[key] = cmd
         self.bg.tag_bind(tag, "<Enter>",
                          lambda e, k=key: self._hover(k, True))
         self.bg.tag_bind(tag, "<Leave>",
                          lambda e, k=key: self._hover(k, False))
-        self.bg.tag_bind(tag, "<Button-1>", lambda e, cb=cmd: cb())
 
     def _hover(self, key, on):
         info = self._btn_ids.get(key)
@@ -92,6 +118,7 @@ class MenuScreen(Screen):
         w, h = self._geom()
         self.bg.delete("menu")
         self._btn_ids = {}
+        self._btn_cmds = {}
         self._title_letters = []
         self._title_snake = []
         self._title_eyes = []
@@ -135,12 +162,20 @@ class MenuScreen(Screen):
         self.app.show("GameScreen")
 
     def on_show(self):
-        self._layout()
+        try:
+            self._layout()
+        except tk.TclError:
+            pass
         if not self.app.save.get("low_spec"):
             self.bg.set_animated(True)
             self._start_anim()
-        if not self._maybe_show_levelup():
-            self._maybe_show_achievements()
+        try:
+            if not self._maybe_show_levelup():
+                self._maybe_show_achievements()
+        except tk.TclError:
+            # даже при ошибке отрисовки уведомления не теряем:
+            # pending остаётся в сохранении и покажется при следующем on_show
+            pass
 
     def on_hide(self):
         self.bg.set_animated(False)
@@ -263,9 +298,6 @@ class MenuScreen(Screen):
             return False
         if self._raise_window("_levelup_win"):
             return True
-        self.app.save["pending_level"] = 0
-        self.app.commit()
-        sfx("levelup")
         unlocked = [f"\u0421\u043b\u043e\u0436\u043d\u043e\u0441\u0442\u044c \u00ab{cfg['label']}\u00bb"
                     for cfg in DIFFICULTIES.values() if cfg["level"] == pending]
         for item in THEMES:
@@ -317,6 +349,12 @@ class MenuScreen(Screen):
                     bg=ACCENT, fg="#06220c", app_bg=BG,
                     font=(self.app.font_ui, 12, "bold")).pack(pady=14)
         self._center_window(win)
+        # \u043e\u043a\u043d\u043e \u0443\u0441\u043f\u0435\u0448\u043d\u043e \u043f\u043e\u0441\u0442\u0440\u043e\u0435\u043d\u043e \u2014 \u0442\u043e\u043b\u044c\u043a\u043e \u0442\u0435\u043f\u0435\u0440\u044c \u0441\u0431\u0440\u0430\u0441\u044b\u0432\u0430\u0435\u043c pending
+        self.app.save["pending_level"] = 0
+        self.app.commit()
+        sfx("levelup")
+        win.lift()
+        win.focus_force()
         return True
 
     def _maybe_show_achievements(self):
@@ -325,9 +363,6 @@ class MenuScreen(Screen):
             return False
         if self._raise_window("_ach_win"):
             return True
-        self.app.save["pending_ach"] = []
-        self.app.commit()
-        sfx("win")
         win = tk.Toplevel(self)
         self._ach_win = win
         win.title("\u0414\u043e\u0441\u0442\u0438\u0436\u0435\u043d\u0438\u0435 \u043f\u043e\u043b\u0443\u0447\u0435\u043d\u043e!")
@@ -357,6 +392,12 @@ class MenuScreen(Screen):
                     bg="#8957e5", fg="#f4efff", app_bg=BG,
                     font=(self.app.font_ui, 12, "bold")).pack(pady=12)
         self._center_window(win)
+        # \u043e\u043a\u043d\u043e \u043f\u043e\u0441\u0442\u0440\u043e\u0435\u043d\u043e \u2014 \u0441\u0431\u0440\u0430\u0441\u044b\u0432\u0430\u0435\u043c pending
+        self.app.save["pending_ach"] = []
+        self.app.commit()
+        sfx("win")
+        win.lift()
+        win.focus_force()
         return True
 
     def on_wheel(self, event):

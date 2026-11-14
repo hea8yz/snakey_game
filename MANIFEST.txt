@@ -1,0 +1,17 @@
+# SNAKEY — список файлов для автообновления (скачиваются из ветки main)
+snakey_achievements.py
+snakey_assets.py
+snakey_content.py
+snakey_drawing.py
+snakey_game.py
+snakey_main.py
+snakey_menu.py
+snakey_minigames.py
+snakey_minis.py
+snakey_save.py
+snakey_settings.py
+snakey_shop.py
+snakey_utils.py
+snakey_widgets.py
+README.md
+VERSION

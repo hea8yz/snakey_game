@@ -52,6 +52,7 @@ class MiniScreen(Screen):
             "<Configure>",
             lambda _e: self.scroller.configure(
                 scrollregion=self.scroller.bbox("all")))
+        self._card_widgets = {}
         RoundButton(self, "←  Назад", lambda: app.show("MenuScreen"),
                     width=170, height=40, app_bg=self.bot,
                     font=(app.font_ui, 11, "bold")).pack(pady=(6, 8))
@@ -67,21 +68,38 @@ class MiniScreen(Screen):
         st = self.app.save.get("stats")
         return st if isinstance(st, dict) else {}
 
-    def _rebuild(self, status=""):
+    def _rebuild(self, status="", reset_scroll=True):
         self.status_var.set(status or
                             "Колесо мыши — прокрутка · сложность влияет "
                             "на скорость и награды")
         for w in self.card_holder.winfo_children():
             w.destroy()
+        self._card_widgets = {}
         for mg_key in GAME_ORDER:
             self._card(mg_key)
-        self.scroller.yview_moveto(0)
+        if reset_scroll:
+            self.scroller.yview_moveto(0)
 
     def _card(self, mg_key):
         mg = MINIGAMES[mg_key]
         card = tk.Canvas(self.card_holder, width=CARD_W, height=CARD_H,
                          bg=self.mid, highlightthickness=0)
-        card.pack(pady=4)
+        prev = None
+        idx = GAME_ORDER.index(mg_key)
+        for k in GAME_ORDER[idx + 1:]:
+            w = self._card_widgets.get(k)
+            if w is not None:
+                try:
+                    w.winfo_exists()
+                except tk.TclError:
+                    continue
+                prev = w
+                break
+        if prev is not None:
+            card.pack(pady=4, before=prev)
+        else:
+            card.pack(pady=4)
+        self._card_widgets[mg_key] = card
         round_rect(card, 1, 1, CARD_W - 1, CARD_H - 1, 16, fill=PANEL,
                    outline=BLUE)
         round_rect(card, 9, 12, 14, CARD_H - 12, 3, fill=BLUE, outline="")
@@ -135,7 +153,17 @@ class MiniScreen(Screen):
             return
         self.app.save[f"{mg_key}_diff"] = key
         self.app.commit()
-        self._rebuild()
+        # пересоздаём только одну карточку — прокрутка списка не сбрасывается
+        self._refresh_card(mg_key)
+
+    def _refresh_card(self, mg_key):
+        old_card = self._card_widgets.get(mg_key)
+        if old_card is not None:
+            try:
+                old_card.destroy()
+            except tk.TclError:
+                pass
+        self._card(mg_key)
 
     def _set_mg_diff(self, key):
         self._set_diff("mg1", key)

@@ -28,6 +28,18 @@ from snakey_utils import blend, hsv_hex, info_text, round_rect
 from snakey_widgets import GradientBG, RoundButton, Screen
 
 
+_OPEN_TIPS = set()
+def close_all_tips():
+    """Закрывает все открытые тултипы (защита от «невидимых» окон,
+    поглощающих клики после пересоздания карточек)."""
+    for win in list(_OPEN_TIPS):
+        try:
+            win.destroy()
+        except tk.TclError:
+            pass
+    _OPEN_TIPS.clear()
+
+
 class ShopCard(tk.Canvas):
     def __init__(self, master, app, kind, item, refresh, card_bg=BG):
         super().__init__(master, width=146, height=66, bg=card_bg,
@@ -41,6 +53,7 @@ class ShopCard(tk.Canvas):
         self.bind("<Button-1>", self._click)
         self.bind("<Motion>", self._motion)
         self.bind("<Leave>", self._leave)
+        self.bind("<Destroy>", lambda e: self._hide_tip())
         self._paint()
 
     def _state(self):
@@ -167,14 +180,23 @@ class ShopCard(tk.Canvas):
                      padx=8, pady=5).pack()
             win.wm_geometry(
                 f"+{self.winfo_pointerx() + 14}+{self.winfo_pointery() + 14}")
+            # клик по тултипу закрывает его — окно никогда не «съедает» клики
+            win.bind("<Button-1>", lambda e: self._hide_tip())
+            try:
+                win.wm_attributes("-topmost", True)
+            except tk.TclError:
+                pass
             self.tip = win
+            _OPEN_TIPS.add(win)
+            win.bind("<Destroy>", lambda e: _OPEN_TIPS.discard(win))
         except tk.TclError:
             self.tip = None
 
-    def _hide_tip(self):
+    def _hide_tip(self, *_args):
         tip = self.tip
         self.tip = None
         if tip is not None:
+            _OPEN_TIPS.discard(tip)
             try:
                 tip.destroy()
             except tk.TclError:
@@ -196,7 +218,6 @@ class ShopCard(tk.Canvas):
                 s["accessory"] = iid
             self.app.commit()
             sfx("click")
-            self.app.commit()
             self.refresh("\u0412\u044b\u0431\u0440\u0430\u043d\u043e!")
             return
         if s["coins"] < self.item["price"]:
@@ -217,8 +238,6 @@ class ShopCard(tk.Canvas):
         check_achievements(s)
         self.app.commit()
         sfx("coin")
-        check_achievements(s)
-        self.app.commit()
         self.refresh(f"\u041a\u0443\u043f\u043b\u0435\u043d\u043e: {self.item['name']}!")
 class ShopScreen(Screen):
     def __init__(self, master, app):
@@ -256,6 +275,8 @@ class ShopScreen(Screen):
                             scrollregion=self.scroller.bbox("all")))
         self.scroller.bind("<Configure>", self._on_resize)
         self._cols = 5
+        self._cards = []
+        self._built_cols = None
 
         RoundButton(self, "\u2190  \u041d\u0430\u0437\u0430\u0434", lambda: app.show("MenuScreen"),
                     width=170, height=40, app_bg=self.bot,
@@ -270,18 +291,34 @@ class ShopScreen(Screen):
             self._rebuild()
 
     def on_show(self):
+        close_all_tips()
         self._rebuild()
         self.scroller.yview_moveto(0)
         self.bg.set_animated(not self.app.save.get("low_spec"))
 
     def on_hide(self):
+        close_all_tips()
         self.bg.set_animated(False)
 
     def _rebuild(self, status=""):
         self.coins_var.set(f"\u25c9  {self.app.save['coins']}")
         self.status_var.set(status)
+        if self._built_cols == self._cols and self._cards:
+            # карточки уже созданы — только перерисовать состояние
+            for card in self._cards:
+                try:
+                    card._paint()
+                except tk.TclError:
+                    self._cards = []
+                    self._built_cols = None
+                    break
+            if self._built_cols == self._cols and self._cards:
+                return
+        self._built_cols = self._cols
+        close_all_tips()
         for w in self.inner.winfo_children():
             w.destroy()
+        self._cards = []
         sections = [
             ("\u0426\u0432\u0435\u0442\u0430 \u0437\u043c\u0435\u0439\u043a\u0438", "color", COLORS),
             ("\u0424\u043e\u043d\u044b  (\u0434\u043e\u0440\u043e\u0436\u0435 \u0444\u043e\u043d \u2014 \u0432\u044b\u0448\u0435 \u043c\u043d\u043e\u0436\u0438\u0442\u0435\u043b\u044c \u043c\u043e\u043d\u0435\u0442)", "theme", THEMES),
@@ -299,7 +336,24 @@ class ShopScreen(Screen):
             grid.pack()
             cols = self._cols
             for i, item in enumerate(items):
-                card = ShopCard(grid, self.app, kind, item, self._rebuild,
+                card = ShopCard(grid, self.app, kind, item,
+                                self._refresh_card_factory(kind),
                                 card_bg=self.mid)
                 card.grid(row=i // cols, column=i % cols, padx=3, pady=3,
                           sticky="nsew")
+                self._cards.append(card)
+
+    def _refresh_card_factory(self, kind):
+        return lambda status="": self._refresh_card(status, kind)
+
+    def _refresh_card(self, status="", kind=None):
+        """Точечное обновление: монеты/статус + перерисовка карточек
+        одного раздела без пересоздания виджетов."""
+        self.coins_var.set(f"{chr(0x25c9)}  {self.app.save['coins']}")
+        self.status_var.set(status)
+        for card in self._cards:
+            if kind is None or card.kind == kind:
+                try:
+                    card._paint()
+                except tk.TclError:
+                    pass
