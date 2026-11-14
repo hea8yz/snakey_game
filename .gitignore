@@ -2,6 +2,11 @@ __pycache__/
 *.pyc
 assets/sounds/*_v*.wav
 assets/sounds/*.tmp
+# Фоновая музыка не хранится в репозитории: игра сама генерирует все 6 треков
+# при запуске (assets/sounds/music_*.wav), а разблокировка треков живёт в сейве.
+# Так локальные сгенерированные файлы не конфликтуют с git при обновлении.
+assets/sounds/music_*.wav
+assets/sounds/bg_music.wav
 
 # Сборка exe (build.bat)
 SNAKEY.exe
